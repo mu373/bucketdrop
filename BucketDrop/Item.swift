@@ -15,12 +15,21 @@ final class UploadedFile {
     var url: String
     var size: Int64
     var uploadedAt: Date
-    
-    init(filename: String, key: String, url: String, size: Int64, uploadedAt: Date = Date()) {
+    var configId: UUID?
+
+    init(
+        filename: String,
+        key: String,
+        url: String,
+        size: Int64,
+        uploadedAt: Date = Date(),
+        configId: UUID? = nil
+    ) {
         self.filename = filename
         self.key = key
         self.url = url
         self.size = size
         self.uploadedAt = uploadedAt
+        self.configId = configId
     }
 }

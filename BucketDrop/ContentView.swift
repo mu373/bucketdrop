@@ -8,9 +8,9 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
-import Combine
 import AppKit
 import Quartz
+import Combine
 
 // Model to track individual file upload state
 struct UploadTask: Identifiable {
@@ -20,7 +20,7 @@ struct UploadTask: Identifiable {
     var progress: Double = 0
     var status: UploadStatus = .pending
     var resultURL: String?
-    
+
     enum UploadStatus {
         case pending
         case uploading
@@ -29,321 +29,552 @@ struct UploadTask: Identifiable {
     }
 }
 
+private enum ContentTab: String {
+    case drop = "Drop"
+    case list = "List"
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openSettingsAction) private var openSettings
-    @Query(sort: \UploadedFile.uploadedAt, order: .reverse) private var uploadedFiles: [UploadedFile]
-    
-    var settings = SettingsManager.shared
-    
-    @State private var isTargeted = false
-    @State private var isUploading = false
-    @State private var uploadTasks: [UploadTask] = []
+
+    @Query(sort: [SortDescriptor(\BucketConfig.sortOrder), SortDescriptor(\BucketConfig.name)])
+    private var configs: [BucketConfig]
+
+    @State private var selectedTab: ContentTab = .drop
+    @State private var targetedConfigIDs: Set<UUID> = []
+    @State private var uploadTasksByConfig: [UUID: [UploadTask]] = [:]
+
     @State private var errorMessage: String?
-    @State private var showSettings = false
-    @State private var s3Objects: [S3Object] = []
+    @State private var copyToastMessage: String?
+
+    // List tab state - live S3 objects
+    @State private var s3ObjectsByConfig: [UUID: [S3Object]] = [:]
     @State private var isLoadingList = false
-    
+
     // Download/Preview state
-    @State private var downloadingObjectKey: String?
+    @State private var downloadingToken: String?
     @State private var downloadProgress: Double = 0
-    
+
+    private var configByID: [UUID: BucketConfig] {
+        Dictionary(uniqueKeysWithValues: configs.map { ($0.id, $0) })
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("BucketDrop")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    openSettings()
-                } label: {
-                    Image(systemName: "gear")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            
+            headerView
+
             Divider()
-            
-            if !settings.isConfigured {
-                // Not configured view
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.secondary)
-                    Text("R2/S3 Not Configured")
-                        .font(.headline)
-                    Text("Add your R2/S3 credentials in settings to start uploading.")
+
+            Picker(selection: $selectedTab) {
+                Text(ContentTab.drop.rawValue).tag(ContentTab.drop)
+                Text(ContentTab.list.rawValue).tag(ContentTab.list)
+            } label: {
+                EmptyView()
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            if let errorMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(errorMessage)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("Open Settings") {
-                        openSettings()
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
-            } else {
-                // Drop zone
-                DropZoneView(
-                    isTargeted: $isTargeted,
-                    isUploading: isUploading,
-                    uploadTasks: uploadTasks
-                )
-                .onTapGesture {
-                    if !isUploading {
-                        openFilePicker()
-                    }
-                }
-                .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
-                    guard !isUploading else { return false }
-                    NSApp.activate(ignoringOtherApps: true)
-                    handleDrop(providers)
-                    return true
-                }
-                .padding(16)
-                
-                // Error message
-                if let error = errorMessage {
-                    HStack {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .foregroundStyle(.red)
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                        Spacer()
-                        Button {
-                            errorMessage = nil
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                }
-                
-                // Divider()
-                
-                // Recent uploads
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("Recent Uploads")
-                            .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    Button {
+                        self.errorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
-                        Spacer()
-                        if isLoadingList {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Button {
-                                Task { await loadS3Objects() }
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .buttonStyle(.borderless)
-                        }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color(nsColor: .windowBackgroundColor))
-                    
-                    if s3Objects.isEmpty && !isLoadingList {
-                        VStack {
-                            Text("No files yet")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        ScrollViewReader { proxy in
-                            List {
-                                ForEach(s3Objects) { object in
-                                    FileRowView(
-                                        object: object,
-                                        previewURL: previewURL(for: object),
-                                        isDownloading: downloadingObjectKey == object.key,
-                                        downloadProgress: downloadingObjectKey == object.key ? downloadProgress : 0
-                                    ) {
-                                        copyToClipboard(object)
-                                    } onDelete: {
-                                        await deleteObject(object)
-                                    } onDownload: {
-                                        await downloadToDownloads(object)
-                                    } onPreview: {
-                                        previewFile(object)
-                                    }
-                                    .id(object.id)
-                                    .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6))
-                                }
-                            }
-                            .listStyle(.plain)
-                            .scrollIndicators(.never)
-                            .onChange(of: s3Objects.first?.id) { _, newValue in
-                                guard let newValue else { return }
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    proxy.scrollTo(newValue, anchor: .top)
-                                }
-                            }
-                        }
-                    }
+                    .buttonStyle(.borderless)
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
+
+            if selectedTab == .drop {
+                dropTabView
+            } else {
+                listTabView
             }
         }
-        // .background(Color(nsColor: .textBackgroundColor)) // enable this for bg color
-        .frame(width: 320, height: 460)
-        .task {
-            if settings.isConfigured {
-                await loadS3Objects()
+        .frame(width: 360, height: 500)
+        .overlay(alignment: .bottom) {
+            if let copyToastMessage {
+                Text(copyToastMessage)
+                    .font(.caption)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(Color(nsColor: .windowBackgroundColor))
+                            .shadow(radius: 2)
+                    )
+                    .padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .onChange(of: configs.map(\.id)) { _, ids in
+            let validIDs = Set(ids)
+            uploadTasksByConfig = uploadTasksByConfig.filter { validIDs.contains($0.key) }
+            targetedConfigIDs = targetedConfigIDs.filter { validIDs.contains($0) }
+        }
+    }
+
+    private var headerView: some View {
+        HStack {
+            Text("BucketDrop")
+                .font(.headline)
+            Spacer()
+            Button {
+                openSettings()
+            } label: {
+                Image(systemName: "gear")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private var dropTabView: some View {
+        if configs.isEmpty {
+            VStack(spacing: 14) {
+                Image(systemName: "tray")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
+                Text("No Drop Targets Configured")
+                    .font(.headline)
+                Text("Create at least one bucket configuration in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Open Settings") {
+                    openSettings()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+        } else {
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(configs) { config in
+                        ConfigDropZoneView(
+                            configName: displayName(for: config),
+                            keyPrefix: config.keyPrefix,
+                            isTargeted: targetedBinding(for: config.id),
+                            uploadTasks: uploadTasksByConfig[config.id] ?? []
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 10))
+                        .onTapGesture {
+                            if !isUploading(configID: config.id) {
+                                openFilePicker(for: config)
+                            }
+                        }
+                        .onDrop(of: [.fileURL], isTargeted: targetedBinding(for: config.id)) { providers in
+                            guard !isUploading(configID: config.id) else { return false }
+                            NSApp.activate(ignoringOtherApps: true)
+                            handleDrop(providers, config: config)
+                            return true
+                        }
+                    }
+                }
+                .padding(12)
             }
         }
     }
-    
-    private func handleDrop(_ providers: [NSItemProvider]) {
-        // Collect all file URLs first, then process as a batch
+
+    private var allS3Objects: [(object: S3Object, config: BucketConfig)] {
+        var result: [(object: S3Object, config: BucketConfig)] = []
+        for config in configs {
+            if let objects = s3ObjectsByConfig[config.id] {
+                result.append(contentsOf: objects.map { (object: $0, config: config) })
+            }
+        }
+        return result.sorted { $0.object.lastModified > $1.object.lastModified }
+    }
+
+    @ViewBuilder
+    private var listTabView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Files")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isLoadingList {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button {
+                        Task { await loadAllS3Objects() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .windowBackgroundColor))
+
+            let objects = allS3Objects
+            if objects.isEmpty && !isLoadingList {
+                VStack(spacing: 8) {
+                    Text("No files")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(objects, id: \.object.id) { item in
+                        S3ObjectRowView(
+                            object: item.object,
+                            configName: displayName(for: item.config),
+                            previewURL: previewURLForObject(item.object, config: item.config),
+                            isDownloading: downloadingToken == item.object.key,
+                            downloadProgress: downloadingToken == item.object.key ? downloadProgress : 0,
+                            templateOptions: item.config.urlTemplates
+                        ) {
+                            copyObjectDefaultURL(item.object, config: item.config)
+                        } onCopyTemplate: { template in
+                            copyObjectTemplateURL(item.object, config: item.config, template: template)
+                        } onDelete: {
+                            await deleteObject(item.object, config: item.config)
+                        } onDownload: {
+                            await downloadObject(item.object, config: item.config)
+                        } onPreview: {
+                            previewObject(item.object, config: item.config)
+                        }
+                        .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+                    }
+                }
+                .listStyle(.plain)
+                .scrollIndicators(.never)
+            }
+        }
+        .task(id: selectedTab) {
+            if selectedTab == .list && s3ObjectsByConfig.isEmpty {
+                await loadAllS3Objects()
+            }
+        }
+    }
+
+    private func loadAllS3Objects() async {
+        isLoadingList = true
+        var results: [UUID: [S3Object]] = [:]
+        for config in configs {
+            do {
+                let objects = try await S3Service.shared.listObjects(config: config)
+                results[config.id] = objects
+            } catch {
+                errorMessage = "\(displayName(for: config)): \(error.localizedDescription)"
+            }
+        }
+        s3ObjectsByConfig = results
+        isLoadingList = false
+    }
+
+    private func displayName(for config: BucketConfig) -> String {
+        let trimmedName = trim(config.name)
+        return trimmedName.isEmpty ? config.bucket : trimmedName
+    }
+
+    private func targetedBinding(for configID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { targetedConfigIDs.contains(configID) },
+            set: { isTargeted in
+                if isTargeted {
+                    targetedConfigIDs.insert(configID)
+                } else {
+                    targetedConfigIDs.remove(configID)
+                }
+            }
+        )
+    }
+
+    private func isUploading(configID: UUID) -> Bool {
+        guard let tasks = uploadTasksByConfig[configID], !tasks.isEmpty else {
+            return false
+        }
+
+        return tasks.contains { task in
+            switch task.status {
+            case .pending, .uploading:
+                return true
+            case .completed, .failed:
+                return false
+            }
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider], config: BucketConfig) {
         let lock = NSLock()
         var collectedURLs: [URL] = []
         let group = DispatchGroup()
-        
+
         for provider in providers {
             group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, error in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
                 defer { group.leave() }
                 guard let data = data as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else {
+                    return
+                }
                 lock.lock()
                 collectedURLs.append(url)
                 lock.unlock()
             }
         }
-        
+
         group.notify(queue: .main) {
             Task { @MainActor in
-                await self.uploadFiles(collectedURLs)
+                await uploadFiles(collectedURLs, to: config)
             }
         }
     }
 
-    private func openFilePicker() {
+    private func openFilePicker(for config: BucketConfig) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
+
         NSApp.activate(ignoringOtherApps: true)
+
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
             panel.beginSheetModal(for: window) { response in
                 guard response == .OK else { return }
                 Task { @MainActor in
-                    await uploadFiles(panel.urls)
+                    await uploadFiles(panel.urls, to: config)
                 }
             }
         } else {
             let response = panel.runModal()
             guard response == .OK else { return }
             Task { @MainActor in
-                await uploadFiles(panel.urls)
+                await uploadFiles(panel.urls, to: config)
             }
         }
     }
-    
+
     @MainActor
-    private func uploadFiles(_ urls: [URL]) async {
+    private func uploadFiles(_ urls: [URL], to config: BucketConfig) async {
         guard !urls.isEmpty else { return }
-        
-        // Create upload tasks for all files
-        uploadTasks = urls.map { UploadTask(filename: $0.lastPathComponent, url: $0) }
-        isUploading = true
+
+        var tasks = urls.map { UploadTask(filename: $0.lastPathComponent, url: $0) }
+        uploadTasksByConfig[config.id] = tasks
         errorMessage = nil
-        
-        var uploadedURLs: [String] = []
-        
-        // Upload files sequentially for clearer progress indication
-        for index in uploadTasks.indices {
-            uploadTasks[index].status = .uploading
-            
+
+        var successfulURLs: [String] = []
+
+        for index in tasks.indices {
+            tasks[index].status = .uploading
+            uploadTasksByConfig[config.id] = tasks
+
             do {
-                let fileURL = uploadTasks[index].url
-                let result = try await S3Service.shared.upload(fileURL: fileURL) { progress in
+                let fileURL = tasks[index].url
+                let result = try await S3Service.shared.upload(fileURL: fileURL, config: config) { progress in
                     Task { @MainActor in
-                        if index < self.uploadTasks.count {
-                            self.uploadTasks[index].progress = progress
+                        guard var currentTasks = uploadTasksByConfig[config.id],
+                              currentTasks.indices.contains(index) else {
+                            return
                         }
+                        currentTasks[index].progress = progress
+                        uploadTasksByConfig[config.id] = currentTasks
                     }
                 }
-                
-                // Save to local storage
+
                 let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
-                let uploadedFile = UploadedFile(
-                    filename: fileURL.lastPathComponent,
-                    key: result.key,
-                    url: result.url,
-                    size: fileSize
-                )
-                modelContext.insert(uploadedFile)
-                
-                uploadTasks[index].status = .completed
-                uploadTasks[index].progress = 1
-                uploadTasks[index].resultURL = result.url
-                uploadedURLs.append(result.url)
-                
-                // Add to list immediately
+
+                // Add to live S3 object list
                 let newObject = S3Object(key: result.key, size: fileSize, lastModified: Date())
-                s3Objects.insert(newObject, at: 0)
-                
+                if s3ObjectsByConfig[config.id] != nil {
+                    s3ObjectsByConfig[config.id]?.insert(newObject, at: 0)
+                } else {
+                    s3ObjectsByConfig[config.id] = [newObject]
+                }
+
+                tasks[index].status = .completed
+                tasks[index].progress = 1
+                tasks[index].resultURL = result.url
+                successfulURLs.append(result.url)
             } catch {
-                uploadTasks[index].status = .failed(error.localizedDescription)
-                errorMessage = "Some uploads failed"
+                tasks[index].status = .failed(error.localizedDescription)
+                errorMessage = "\(displayName(for: config)): \(error.localizedDescription)"
             }
+
+            uploadTasksByConfig[config.id] = tasks
         }
-        
-        // Copy all successful URLs to clipboard
-        if !uploadedURLs.isEmpty {
+
+        if !successfulURLs.isEmpty {
             NSPasteboard.general.clearContents()
-            if uploadedURLs.count == 1 {
-                NSPasteboard.general.setString(uploadedURLs[0], forType: .string)
+            if successfulURLs.count == 1 {
+                NSPasteboard.general.setString(successfulURLs[0], forType: .string)
+                showCopyToast("Copied \(defaultTemplateLabel(for: config))")
             } else {
-                // Join multiple URLs with newlines
-                NSPasteboard.general.setString(uploadedURLs.joined(separator: "\n"), forType: .string)
+                NSPasteboard.general.setString(successfulURLs.joined(separator: "\n"), forType: .string)
+                showCopyToast("Copied \(successfulURLs.count) URLs (\(defaultTemplateLabel(for: config)))")
             }
         }
-        
-        // Reset after delay
+
         try? await Task.sleep(for: .seconds(2))
-        uploadTasks = []
-        isUploading = false
+        uploadTasksByConfig[config.id] = []
     }
-    
-    private func loadS3Objects() async {
-        isLoadingList = true
+
+    // MARK: - S3 Object Actions (List tab)
+
+    private func copyObjectDefaultURL(_ object: S3Object, config: BucketConfig) {
+        let template = defaultTemplate(for: config)
+        let url = S3Service.shared.buildURL(
+            key: object.key,
+            config: config,
+            template: template,
+            basename: object.filename
+        )
+        copyToClipboard(url)
+        showCopyToast("Copied \(template?.label ?? "URL")")
+    }
+
+    private func copyObjectTemplateURL(_ object: S3Object, config: BucketConfig, template: URLTemplate) {
+        let url = S3Service.shared.buildURL(
+            key: object.key,
+            config: config,
+            template: template,
+            basename: object.filename
+        )
+        copyToClipboard(url)
+        showCopyToast("Copied \(template.label)")
+    }
+
+    private func deleteObject(_ object: S3Object, config: BucketConfig) async {
         do {
-            s3Objects = try await S3Service.shared.listObjects()
+            try await S3Service.shared.deleteObject(key: object.key, config: config)
+            s3ObjectsByConfig[config.id]?.removeAll { $0.key == object.key }
         } catch {
             errorMessage = error.localizedDescription
         }
-        isLoadingList = false
-    }
-    
-    private func copyToClipboard(_ object: S3Object) {
-        let url = buildURL(for: object)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url, forType: .string)
-    }
-    
-    private func buildURL(for object: S3Object) -> String {
-        let encodedKey = awsURLEncodePath(object.key)
-        if !settings.publicUrlBase.isEmpty {
-            let base = settings.publicUrlBase.hasSuffix("/") ? String(settings.publicUrlBase.dropLast()) : settings.publicUrlBase
-            return "\(base)/\(encodedKey)"
-        }
-        return "https://\(settings.bucket).s3.\(settings.region).amazonaws.com/\(encodedKey)"
     }
 
-    private func previewURL(for object: S3Object) -> URL? {
+    private func downloadObject(_ object: S3Object, config: BucketConfig) async {
+        let savePanel = NSSavePanel()
+        savePanel.nameFieldStringValue = object.filename
+        savePanel.canCreateDirectories = true
+        savePanel.isExtensionHidden = false
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = await savePanel.begin()
+        guard response == .OK, let destination = savePanel.url else { return }
+
+        if let cachedURL = getCachedFile(for: object) {
+            do {
+                try FileManager.default.copyItem(at: cachedURL, to: destination)
+                NSWorkspace.shared.selectFile(destination.path, inFileViewerRootedAtPath: "")
+                return
+            } catch { }
+        }
+
+        do {
+            downloadingToken = object.key
+            downloadProgress = 0
+
+            let cacheURL = cachedFileURL(for: object)
+            let savedURL = try await S3Service.shared.download(key: object.key, to: cacheURL, config: config, overwrite: true) { progress in
+                Task { @MainActor in
+                    downloadProgress = progress
+                }
+            }
+
+            try FileManager.default.copyItem(at: savedURL, to: destination)
+            downloadingToken = nil
+            NSWorkspace.shared.selectFile(destination.path, inFileViewerRootedAtPath: "")
+        } catch {
+            downloadingToken = nil
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func previewObject(_ object: S3Object, config: BucketConfig) {
+        Task {
+            let tempFile = cachedFileURL(for: object)
+
+            if let cachedURL = getCachedFile(for: object) {
+                await MainActor.run { showQuickLook(for: cachedURL) }
+                return
+            }
+
+            do {
+                downloadingToken = object.key
+                downloadProgress = 0
+
+                let savedURL = try await S3Service.shared.download(key: object.key, to: tempFile, config: config, overwrite: true) { progress in
+                    Task { @MainActor in
+                        downloadProgress = progress
+                    }
+                }
+
+                downloadingToken = nil
+
+                await MainActor.run {
+                    showQuickLook(for: savedURL)
+                }
+            } catch {
+                downloadingToken = nil
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func showQuickLook(for url: URL) {
+        let coordinator = QuickLookCoordinator()
+        coordinator.items = [QuickLookItem(url: url)]
+
+        Self.quickLookCoordinator = coordinator
+
+        guard let panel = QLPreviewPanel.shared() else { return }
+        panel.dataSource = coordinator
+        panel.delegate = coordinator
+        panel.currentPreviewItemIndex = 0
+
+        if panel.isVisible {
+            panel.reloadData()
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    // MARK: - Shared Helpers
+
+    private func copyToClipboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func defaultTemplate(for config: BucketConfig) -> URLTemplate? {
+        config.urlTemplates.first { !trim($0.template).isEmpty }
+    }
+
+    private func defaultTemplateLabel(for config: BucketConfig) -> String {
+        guard let template = defaultTemplate(for: config) else { return "URL" }
+        let label = trim(template.label)
+        return label.isEmpty ? "URL" : label
+    }
+
+    private func previewURLForObject(_ object: S3Object, config: BucketConfig) -> URL? {
         guard isImageFile(object.filename) else { return nil }
-        return URL(string: buildURL(for: object))
+        let urlString = S3Service.shared.buildURL(key: object.key, config: config, basename: object.filename)
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return url
     }
 
     private func isImageFile(_ filename: String) -> Bool {
@@ -351,214 +582,124 @@ struct ContentView: View {
         return ["jpg", "jpeg", "png", "gif", "webp", "svg"].contains(ext)
     }
 
-    private func awsURLEncodePath(_ path: String) -> String {
-        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
-        return path
-            .split(separator: "/")
-            .map { segment in
-                segment.addingPercentEncoding(withAllowedCharacters: unreserved) ?? String(segment)
-            }
-            .joined(separator: "/")
-    }
-    
-    private func deleteObject(_ object: S3Object) async {
-        do {
-            try await S3Service.shared.deleteObject(key: object.key)
-            await loadS3Objects()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-    
     // MARK: - Cache
-    
+
     private func cachedFileURL(for object: S3Object) -> URL {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("BucketDrop")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        return tempDir.appendingPathComponent(object.key)
+        let keyComponent = object.key.replacingOccurrences(of: "/", with: "__")
+        return tempDir.appendingPathComponent(keyComponent)
     }
-    
+
     private func getCachedFile(for object: S3Object) -> URL? {
         let cachedURL = cachedFileURL(for: object)
-        if FileManager.default.fileExists(atPath: cachedURL.path) {
-            return cachedURL
-        }
-        return nil
+        return FileManager.default.fileExists(atPath: cachedURL.path) ? cachedURL : nil
     }
-    
-    // MARK: - Download
-    
-    private func downloadToDownloads(_ object: S3Object) async {
-        // Show save panel first
-        let savePanel = NSSavePanel()
-        savePanel.nameFieldStringValue = object.filename
-        savePanel.canCreateDirectories = true
-        savePanel.isExtensionHidden = false
-        
-        NSApp.activate(ignoringOtherApps: true)
-        let response = await savePanel.begin()
-        
-        guard response == .OK, let destination = savePanel.url else {
-            return
+
+    @MainActor
+    private func showCopyToast(_ message: String) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            copyToastMessage = message
         }
-        
-        // Check if we have it cached (from Quick Look preview)
-        if let cachedURL = getCachedFile(for: object) {
-            do {
-                try FileManager.default.copyItem(at: cachedURL, to: destination)
-                NSWorkspace.shared.selectFile(destination.path, inFileViewerRootedAtPath: "")
-                return
-            } catch {
-                // Cache copy failed, fall through to download
-            }
-        }
-        
-        // Download from S3
-        do {
-            downloadingObjectKey = object.key
-            downloadProgress = 0
-            
-            // Download to cache first, then copy to destination
-            let cacheURL = cachedFileURL(for: object)
-            let savedURL = try await S3Service.shared.download(key: object.key, to: cacheURL, overwrite: true) { progress in
-                Task { @MainActor in
-                    downloadProgress = progress
-                }
-            }
-            
-            // Copy from cache to user's destination
-            try FileManager.default.copyItem(at: savedURL, to: destination)
-            
-            downloadingObjectKey = nil
-            
-            // Reveal in Finder
-            NSWorkspace.shared.selectFile(destination.path, inFileViewerRootedAtPath: "")
-        } catch {
-            downloadingObjectKey = nil
-            errorMessage = error.localizedDescription
-        }
-    }
-    
-    // MARK: - Preview with Quick Look
-    
-    private func previewFile(_ object: S3Object) {
+
         Task {
-            let tempFile = cachedFileURL(for: object)
-            
-            // Check if already cached
-            if let cachedURL = getCachedFile(for: object) {
-                await MainActor.run {
-                    showQuickLook(for: cachedURL)
+            try? await Task.sleep(for: .seconds(1.6))
+            await MainActor.run {
+                guard copyToastMessage == message else { return }
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    copyToastMessage = nil
                 }
-                return
-            }
-            
-            // Download to cache
-            do {
-                downloadingObjectKey = object.key
-                downloadProgress = 0
-                
-                let savedURL = try await S3Service.shared.download(key: object.key, to: tempFile, overwrite: true) { progress in
-                    Task { @MainActor in
-                        downloadProgress = progress
-                    }
-                }
-                
-                downloadingObjectKey = nil
-                
-                await MainActor.run {
-                    showQuickLook(for: savedURL)
-                }
-            } catch {
-                downloadingObjectKey = nil
-                errorMessage = error.localizedDescription
             }
         }
     }
-    
-    private func showQuickLook(for url: URL) {
-        // Use QLPreviewPanel for Quick Look
-        let coordinator = QuickLookCoordinator()
-        coordinator.items = [QuickLookItem(url: url)]
-        
-        // Store coordinator to keep it alive
-        Self.quickLookCoordinator = coordinator
-        
-        guard let panel = QLPreviewPanel.shared() else { return }
-        panel.dataSource = coordinator
-        panel.delegate = coordinator
-        panel.currentPreviewItemIndex = 0
-        
-        if panel.isVisible {
-            panel.reloadData()
-        } else {
-            panel.makeKeyAndOrderFront(nil)
-        }
+
+    private func trim(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    
+
     // Static storage for coordinator
     private static var quickLookCoordinator: QuickLookCoordinator?
 }
 
-struct DropZoneView: View {
+struct ConfigDropZoneView: View {
+    let configName: String
+    let keyPrefix: String
     @Binding var isTargeted: Bool
-    let isUploading: Bool
     let uploadTasks: [UploadTask]
-    
+
     private var completedCount: Int {
-        uploadTasks.filter { 
+        uploadTasks.filter {
             if case .completed = $0.status { return true }
             return false
         }.count
     }
-    
+
     private var totalCount: Int {
         uploadTasks.count
     }
-    
+
     private var overallProgress: Double {
         guard !uploadTasks.isEmpty else { return 0 }
         return uploadTasks.reduce(0) { $0 + $1.progress } / Double(uploadTasks.count)
     }
-    
+
     private var currentlyUploading: UploadTask? {
-        uploadTasks.first { 
+        uploadTasks.first {
             if case .uploading = $0.status { return true }
             return false
         }
     }
-    
+
     private var allCompleted: Bool {
         completedCount == totalCount && totalCount > 0
     }
-    
+
+    private var hasActiveUploads: Bool {
+        !uploadTasks.isEmpty
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
-            if isUploading {
-                if allCompleted {
-                    // All done state
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color(nsColor: .systemGreen))
-                    if totalCount == 1 {
-                        Text("Copied to clipboard!")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(configName)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                let normalizedPrefix = keyPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normalizedPrefix.isEmpty {
+                    Text(normalizedPrefix)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.35)))
+                }
+            }
+
+            VStack(spacing: 7) {
+                if hasActiveUploads {
+                    if allCompleted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(Color(nsColor: .systemGreen))
+                        if totalCount == 1 {
+                            Text("Upload finished")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(totalCount) uploads finished")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
-                        Text("\(totalCount) URLs copied to clipboard!")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    // Progress state
-                    VStack(spacing: 6) {
                         ProgressView(value: overallProgress)
                             .progressViewStyle(.linear)
-                            .frame(maxWidth: 220)
-                        
-                        // Status text
+                            .frame(maxWidth: .infinity)
+
                         if totalCount == 1 {
-                            Text("Uploading \(currentlyUploading?.filename ?? "")...")
+                            Text("Uploading \(currentlyUploading?.filename ?? "")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -574,24 +715,25 @@ struct DropZoneView: View {
                             }
                         }
                     }
+                } else {
+                    Image(systemName: isTargeted ? "arrow.down.circle.fill" : "arrow.up.circle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+                    Text(isTargeted ? "Drop to upload" : "Drop files here or click to select")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } else {
-                Image(systemName: isTargeted ? "arrow.down.circle.fill" : "arrow.up.circle")
-                    .font(.system(size: 24))
-                    .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
-                Text(isTargeted ? "Drop to upload" : "Drop files here or click to select")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 100)
+        .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isTargeted ? Color.accentColor.opacity(0.1) : Color(nsColor: .quaternaryLabelColor).opacity(0.5))
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isTargeted ? Color.accentColor.opacity(0.12) : Color(nsColor: .quaternaryLabelColor).opacity(0.45))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(
                     isTargeted ? Color.accentColor : Color(nsColor: .separatorColor),
                     lineWidth: isTargeted ? 2 : 1
@@ -604,7 +746,7 @@ struct DropZoneView: View {
 // Custom progress style that doesn't gray out when window loses focus
 struct ActiveProgressViewStyle: ProgressViewStyle {
     var height: CGFloat = 12
-    
+
     func makeBody(configuration: Configuration) -> some View {
         GeometryReader { geometry in
             let progress = configuration.fractionCompleted ?? 0
@@ -630,11 +772,11 @@ enum CachedImageState {
 final class ImageCache {
     static let shared = ImageCache()
     private let cache = NSCache<NSURL, NSImage>()
-    
+
     func image(for url: URL) -> NSImage? {
         cache.object(forKey: url as NSURL)
     }
-    
+
     func insert(_ image: NSImage, for url: URL) {
         cache.setObject(image, forKey: url as NSURL)
     }
@@ -643,13 +785,13 @@ final class ImageCache {
 final class ImageLoader: ObservableObject {
     @Published var state: CachedImageState = .loading
     private var task: Task<Void, Never>?
-    
+
     func load(from url: URL) {
         if let cached = ImageCache.shared.image(for: url) {
             state = .success(Image(nsImage: cached))
             return
         }
-        
+
         task?.cancel()
         task = Task {
             do {
@@ -665,7 +807,7 @@ final class ImageLoader: ObservableObject {
             }
         }
     }
-    
+
     func cancel() {
         task?.cancel()
         task = nil
@@ -676,7 +818,7 @@ struct CachedAsyncImage<Content: View>: View {
     let url: URL
     @ViewBuilder let content: (CachedImageState) -> Content
     @StateObject private var loader = ImageLoader()
-    
+
     var body: some View {
         content(loader.state)
             .onAppear { loader.load(from: url) }
@@ -687,23 +829,25 @@ struct CachedAsyncImage<Content: View>: View {
     }
 }
 
-struct FileRowView: View {
+struct S3ObjectRowView: View {
     let object: S3Object
+    let configName: String
     let previewURL: URL?
     let isDownloading: Bool
     let downloadProgress: Double
-    let onCopy: () -> Void
+    let templateOptions: [URLTemplate]
+    let onCopyDefault: () -> Void
+    let onCopyTemplate: (URLTemplate) -> Void
     let onDelete: () async -> Void
     let onDownload: () async -> Void
     let onPreview: () -> Void
-    
+
     @State private var isHovered = false
     @State private var isDeleting = false
     @State private var isCopied = false
-    
+
     var body: some View {
         HStack(spacing: 10) {
-            // Thumbnail
             if let previewURL {
                 CachedAsyncImage(url: previewURL) { state in
                     switch state {
@@ -735,43 +879,42 @@ struct FileRowView: View {
                 }
                 .frame(width: 32, height: 32)
             }
-            
-            // File info
-            VStack(alignment: .leading, spacing: 2) {
+
+            VStack(alignment: .leading, spacing: 3) {
                 Text(object.filename)
                     .font(.system(.subheadline).weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                
-                // Show progress bar OR file size
+
                 if isDownloading {
                     ProgressView(value: downloadProgress)
                         .progressViewStyle(ActiveProgressViewStyle(height: 6))
                         .padding(.top, 2)
                 } else {
-                    Text(formatSize(object.size))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text(formatSize(object.size))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text(configName)
+                            .font(.caption2)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule()
+                                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.35))
+                            )
+                    }
                 }
             }
-            
+
             Spacer(minLength: 8)
-            
-            // Action buttons - always in layout, opacity controlled by hover
+
             HStack(spacing: 4) {
                 Button {
-                    if !isDeleting && !isDownloading {
-                        onCopy()
-                        Task { @MainActor in
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                isCopied = true
-                            }
-                            try? await Task.sleep(for: .seconds(1))
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                isCopied = false
-                            }
-                        }
-                    }
+                    guard !isDeleting && !isDownloading else { return }
+                    onCopyDefault()
+                    animateCopyFeedback()
                 } label: {
                     Image(systemName: isCopied ? "checkmark.circle.fill" : "link")
                         .foregroundStyle(isCopied ? Color.green : Color.secondary)
@@ -779,11 +922,21 @@ struct FileRowView: View {
                 .buttonStyle(.borderless)
                 .help("Copy URL")
                 .disabled(isDeleting || isDownloading)
-                
-                Button {
-                    Task {
-                        await onDownload()
+                .contextMenu {
+                    if templateOptions.isEmpty {
+                        Text("No templates")
+                    } else {
+                        ForEach(templateOptions) { template in
+                            Button(template.label) {
+                                onCopyTemplate(template)
+                                animateCopyFeedback()
+                            }
+                        }
                     }
+                }
+
+                Button {
+                    Task { await onDownload() }
                 } label: {
                     Image(systemName: "arrow.down.circle")
                         .foregroundStyle(Color.secondary)
@@ -791,7 +944,7 @@ struct FileRowView: View {
                 .buttonStyle(.borderless)
                 .help("Download")
                 .disabled(isDeleting || isDownloading)
-                
+
                 Button {
                     Task {
                         isDeleting = true
@@ -822,7 +975,19 @@ struct FileRowView: View {
             }
         }
     }
-    
+
+    private func animateCopyFeedback() {
+        Task { @MainActor in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isCopied = true
+            }
+            try? await Task.sleep(for: .seconds(1))
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isCopied = false
+            }
+        }
+    }
+
     private func iconForFile(_ filename: String) -> String {
         let ext = (filename as NSString).pathExtension.lowercased()
         switch ext {
@@ -840,7 +1005,7 @@ struct FileRowView: View {
             return "doc"
         }
     }
-    
+
     private func formatSize(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
@@ -852,23 +1017,23 @@ struct FileRowView: View {
 
 class QuickLookItem: NSObject, QLPreviewItem {
     let url: URL
-    
+
     init(url: URL) {
         self.url = url
         super.init()
     }
-    
+
     var previewItemURL: URL? { url }
     var previewItemTitle: String? { url.lastPathComponent }
 }
 
 class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     var items: [QuickLookItem] = []
-    
+
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
         items.count
     }
-    
+
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
         guard index < items.count else { return nil }
         return items[index]
@@ -877,5 +1042,5 @@ class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDe
 
 #Preview {
     ContentView()
-        .modelContainer(for: UploadedFile.self, inMemory: true)
+        .modelContainer(for: [UploadedFile.self, BucketConfig.self], inMemory: true)
 }
