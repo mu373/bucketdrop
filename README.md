@@ -6,14 +6,14 @@ Forked from [fayazara/bucketdrop](https://github.com/fayazara/bucketdrop) with m
 
 ## Features
 
-- **Multiple bucket configs** — add as many S3-compatible drop targets as you need, each with its own credentials, provider, key prefix, rename mode, and URL copy formats
-- **Rename on upload** — per-bucket rename mode: keep original filename, timestamp (Unix / ISO 8601 / compact / date-only), content hash (SHA-256 / MD5), or a custom template with variables like `${basename}`, `${timestamp}`, `${hash}`, `${uuid}`, etc.
-- **Customizable URL copy formats** — define URL templates per bucket (e.g. public URL, S3 URI, AWS direct link); the default template is auto-copied to clipboard on upload, and all templates are available via right-click
-- **Provider presets** — built-in defaults for AWS S3, Google Cloud Storage, Cloudflare R2, and a generic "Other" option
-- **Drag & drop or click to upload** — drop files onto any configured drop zone, or click to select from Finder
-- **Unified file list** — browse all objects across every configured bucket in a single date-sorted list
-- **Quick Look, download, delete** — double-click to preview, hover for action buttons
-- **No AWS SDK** — all S3 API calls and AWS Signature V4 signing are implemented in pure Swift using CryptoKit
+- **Multiple bucket configs**: add as many S3-compatible drop targets as you need, each with its own credentials, provider, key prefix, rename mode, and URL copy formats
+- **Rename on upload**: per-bucket rename mode: keep original filename, timestamp (Unix / ISO 8601 / compact / date-only), content hash (SHA-256 / MD5), or a custom template with variables like `${basename}`, `${timestamp}`, `${hash}`, `${uuid}`, etc.
+- **Customizable URL copy formats**: define URL templates per bucket (e.g. public URL, S3 URI, AWS direct link); the default template is auto-copied to clipboard on upload, and all templates are available via right-click
+- **Provider presets**: built-in defaults for AWS S3, Google Cloud Storage, Cloudflare R2, and a generic "Other" option
+- **Drag & drop or click to upload**: drop files onto any configured drop zone, or click to select from Finder
+- **Unified file list**: browse all objects across every configured bucket in a single date-sorted list
+- **Quick Look, download, delete**: double-click to preview, hover for action buttons
+- **No AWS SDK**: all S3 API calls and AWS Signature V4 signing are implemented in pure Swift using CryptoKit
 
 ## Requirements
 
@@ -23,7 +23,7 @@ Forked from [fayazara/bucketdrop](https://github.com/fayazara/bucketdrop) with m
 
 1. Download the latest release
 2. Move `BucketDrop.app` to your Applications folder
-3. Open the app — it will appear in your menubar
+3. Open the app. It will appear in your menubar
 
 ## Setup
 
@@ -31,17 +31,17 @@ Forked from [fayazara/bucketdrop](https://github.com/fayazara/bucketdrop) with m
 2. Click the gear icon to open **Settings**
 3. Click **+** in the sidebar to add a new drop target
 4. Configure the bucket:
-   - **Name** — a label shown on the drop zone
-   - **Provider** — choose AWS S3, Google Cloud Storage, Cloudflare R2, or Other (sets sensible defaults for endpoint, region, and URI scheme)
+   - **Name**: a label shown on the drop zone
+   - **Provider**: choose AWS S3, Google Cloud Storage, Cloudflare R2, or Other (sets sensible defaults for endpoint, region, and URI scheme)
    - **Access Key ID** / **Secret Access Key**
    - **Bucket** name
    - **Region** (e.g. `us-east-1`, or `auto` for R2/GCS)
-   - **Endpoint** — custom S3-compatible endpoint (hidden for AWS S3)
-   - **Key Prefix** — optional path prefix (e.g. `uploads/`)
+   - **Endpoint**: custom S3-compatible endpoint (hidden for AWS S3)
+   - **Key Prefix**: optional path prefix (e.g. `uploads/`)
 5. Optionally configure **Rename on Upload** (original, dateTime, hash, or custom template)
-6. Optionally configure **Copy Formats** — add, remove, or reorder URL templates; the first one is the default
+6. Optionally configure **Copy Formats**: add, remove, or reorder URL templates; the first one is the default
 7. Click **Test Connection** to verify
-8. Changes are saved automatically — there is no Save button
+8. Changes are saved automatically (there is no Save button)
 
 Add more buckets by clicking **+** again. You can also right-click a config to duplicate it.
 
