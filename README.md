@@ -1,7 +1,5 @@
 # BucketDrop
 
-<img width="1280" height="800" alt="Preview 1" src="https://github.com/user-attachments/assets/a37fd19a-7711-49a6-b5f4-40d9024508b4" />
-
 Bucketdrop is a simple macOS menubar app for uploading files to S3-compatible storage (Cloudflare R2, AWS S3, MinIO, etc.).
 
 
