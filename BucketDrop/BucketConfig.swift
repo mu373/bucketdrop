@@ -164,6 +164,7 @@ final class BucketConfig {
     var dateTimeFormat: String = DateTimeFormat.unix.rawValue
     var hashAlgorithm: String = HashAlgorithm.sha256.rawValue
     var customRenameTemplate: String = "${original}"
+    var copyURLAfterUpload: Bool = true
 
     init(
         id: UUID = UUID(),
@@ -181,7 +182,8 @@ final class BucketConfig {
         renameMode: String = RenameMode.original.rawValue,
         dateTimeFormat: String = DateTimeFormat.unix.rawValue,
         hashAlgorithm: String = HashAlgorithm.sha256.rawValue,
-        customRenameTemplate: String = "${ORIGINAL}"
+        customRenameTemplate: String = "${ORIGINAL}",
+        copyURLAfterUpload: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -199,5 +201,6 @@ final class BucketConfig {
         self.dateTimeFormat = dateTimeFormat
         self.hashAlgorithm = hashAlgorithm
         self.customRenameTemplate = customRenameTemplate
+        self.copyURLAfterUpload = copyURLAfterUpload
     }
 }

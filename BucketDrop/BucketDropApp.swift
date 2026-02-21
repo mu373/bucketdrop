@@ -60,9 +60,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: "BucketDrop")
-            button.action = #selector(togglePopover)
+            button.image = NSImage(systemSymbolName: "cloud.fill", accessibilityDescription: "BucketDrop")
+            button.action = #selector(statusItemClicked)
             button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         // Setup popover
@@ -81,6 +82,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.openSettings()
             })
         popover?.contentViewController = NSHostingController(rootView: contentView)
+    }
+
+    @objc func statusItemClicked() {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            let menu = NSMenu()
+            menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            statusItem?.menu = menu
+            statusItem?.button?.performClick(nil)
+            // Remove menu so left-click works normally again
+            statusItem?.menu = nil
+            return
+        }
+        togglePopover()
     }
 
     @objc func togglePopover() {

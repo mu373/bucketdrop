@@ -415,7 +415,7 @@ struct ContentView: View {
             uploadTasksByConfig[config.id] = tasks
         }
 
-        if !successfulURLs.isEmpty {
+        if !successfulURLs.isEmpty && config.copyURLAfterUpload {
             NSPasteboard.general.clearContents()
             if successfulURLs.count == 1 {
                 NSPasteboard.general.setString(successfulURLs[0], forType: .string)

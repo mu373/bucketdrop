@@ -23,6 +23,7 @@ private struct BucketConfigDraft: Equatable {
     var dateTimeFormat: String = DateTimeFormat.unix.rawValue
     var hashAlgorithm: String = HashAlgorithm.sha256.rawValue
     var customRenameTemplate: String = "${original}"
+    var copyURLAfterUpload: Bool = true
 
     init() { }
 
@@ -41,6 +42,7 @@ private struct BucketConfigDraft: Equatable {
         dateTimeFormat = config.dateTimeFormat
         hashAlgorithm = config.hashAlgorithm
         customRenameTemplate = config.customRenameTemplate
+        copyURLAfterUpload = config.copyURLAfterUpload
     }
 }
 
@@ -338,6 +340,7 @@ struct SettingsView: View {
                 }
 
                 Section("Copy Formats") {
+                    Toggle("Copy to clipboard after upload", isOn: $draft.copyURLAfterUpload)
                     VStack(spacing: 0) {
                         List(selection: $selectedTemplateID) {
                             ForEach(draft.urlTemplates) { template in
@@ -484,6 +487,7 @@ struct SettingsView: View {
         config.dateTimeFormat = draft.dateTimeFormat
         config.hashAlgorithm = draft.hashAlgorithm
         config.customRenameTemplate = draft.customRenameTemplate
+        config.copyURLAfterUpload = draft.copyURLAfterUpload
 
         try? modelContext.save()
     }
