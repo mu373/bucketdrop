@@ -436,6 +436,12 @@ struct ContentView: View {
                             } catch {
                                 print("[BucketDrop] DynamoDB error (\(action.label)): \(error)")
                             }
+                        case .http:
+                            do {
+                                try await HTTPActionService.shared.perform(action: action, metadata: metadata)
+                            } catch {
+                                print("[BucketDrop] HTTP action error (\(action.label)): \(error)")
+                            }
                         }
                     }
                 }

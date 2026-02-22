@@ -456,7 +456,9 @@ struct SettingsView: View {
                                 Button("DynamoDB") {
                                     addPostUploadAction(type: .dynamoDB(DynamoDBActionConfig()))
                                 }
-                                // future: Button("HTTP Request") { ... }
+                                Button("HTTP Request") {
+                                    addPostUploadAction(type: .http(HTTPActionConfig()))
+                                }
                             } label: {
                                 Image(systemName: "plus")
                                     .frame(width: 24, height: 18)
@@ -711,6 +713,8 @@ struct SettingsView: View {
         switch action.actionType {
         case .dynamoDB:
             return "DynamoDB Action"
+        case .http:
+            return "HTTP Action"
         }
     }
 
@@ -718,6 +722,8 @@ struct SettingsView: View {
         switch action.actionType {
         case .dynamoDB:
             return "DynamoDB"
+        case .http:
+            return "HTTP"
         }
     }
 
@@ -737,6 +743,7 @@ struct SettingsView: View {
         let defaultLabel: String
         switch type {
         case .dynamoDB: defaultLabel = "DynamoDB Action"
+        case .http: defaultLabel = "HTTP Action"
         }
         let action = PostUploadAction(
             enabled: true,
@@ -1097,9 +1104,10 @@ private struct TemplateTokenField: NSViewRepresentable {
         // Size the textView to fill the scrollView content area
         DispatchQueue.main.async {
             let contentSize = scrollView.contentSize
-            textView.minSize = NSSize(width: contentSize.width, height: 28)
-            textView.maxSize = NSSize(width: contentSize.width, height: 28)
-            textView.frame = NSRect(origin: .zero, size: NSSize(width: contentSize.width, height: 28))
+            let height = max(contentSize.height, 28)
+            textView.minSize = NSSize(width: contentSize.width, height: height)
+            textView.maxSize = NSSize(width: contentSize.width, height: height)
+            textView.frame = NSRect(origin: .zero, size: NSSize(width: contentSize.width, height: height))
         }
 
         return scrollView
@@ -1108,13 +1116,14 @@ private struct TemplateTokenField: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
-        // Keep textView width in sync
-        let contentWidth = scrollView.contentSize.width
-        if contentWidth > 0 {
-            textView.minSize = NSSize(width: contentWidth, height: 28)
-            textView.maxSize = NSSize(width: contentWidth, height: 28)
-            if abs(textView.frame.width - contentWidth) > 1 {
-                textView.frame.size.width = contentWidth
+        // Keep textView size in sync with scrollView
+        let contentSize = scrollView.contentSize
+        if contentSize.width > 0 {
+            let height = max(contentSize.height, 28)
+            textView.minSize = NSSize(width: contentSize.width, height: height)
+            textView.maxSize = NSSize(width: contentSize.width, height: height)
+            if abs(textView.frame.width - contentSize.width) > 1 || abs(textView.frame.height - height) > 1 {
+                textView.frame.size = NSSize(width: contentSize.width, height: height)
             }
         }
 
@@ -1311,14 +1320,33 @@ private struct PostUploadActionEditorSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    // Shared state
     @State private var label: String = ""
     @State private var enabled: Bool = true
+
+    // DynamoDB state
     @State private var tableName: String = ""
-    @State private var region: String = ""
+    @State private var dbRegion: String = ""
     @State private var attributes: [DynamoDBAttribute] = []
     @State private var selectedAttributeID: UUID?
     @State private var attributeRefs: [UUID: TemplateTextViewRef] = [:]
     @State private var showPreview = false
+
+    // HTTP state
+    @State private var httpURLTemplate: String = ""
+    @State private var httpMethod: String = "POST"
+    @State private var httpContentType: HTTPContentType = .json
+    @State private var httpHeaders: [HTTPHeader] = []
+    @State private var httpBodyTemplate: String = ""
+    @State private var selectedHeaderID: UUID?
+    @State private var headerRefs: [UUID: TemplateTextViewRef] = [:]
+    @State private var httpURLRef = TemplateTextViewRef()
+    @State private var httpBodyRef = TemplateTextViewRef()
+
+    private var isDynamoDB: Bool {
+        if case .dynamoDB = action.actionType { return true }
+        return false
+    }
 
     private let variableReferences: [(token: String, label: String)] = [
         ("originalFilename", "Original Filename"),
@@ -1334,12 +1362,17 @@ private struct PostUploadActionEditorSheet: View {
     ]
 
     private var canSave: Bool {
-        !trim(tableName).isEmpty
+        switch action.actionType {
+        case .dynamoDB:
+            return !trim(tableName).isEmpty
+        case .http:
+            return !trim(httpURLTemplate).isEmpty
+        }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Edit Action")
+            Text(isDynamoDB ? "Edit DynamoDB Action" : "Edit HTTP Action")
                 .font(.headline)
 
             Toggle("Enabled", isOn: $enabled)
@@ -1348,108 +1381,13 @@ private struct PostUploadActionEditorSheet: View {
                 Text("Label")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                TextField("Label", text: $label, prompt: Text("File metadata table"))
+                TextField("Label", text: $label, prompt: Text(isDynamoDB ? "File metadata table" : "Webhook notification"))
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Table Name")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                TextField("Table Name", text: $tableName, prompt: Text("my-table-name"))
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Region")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                TextField("Region", text: $region, prompt: Text("Same as bucket"))
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Attribute Mappings")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Text("Attribute")
-                            .frame(width: 100, alignment: .leading)
-                        Divider()
-                            .frame(height: 14)
-                        Text("Type")
-                            .frame(width: 70, alignment: .leading)
-                        Divider()
-                            .frame(height: 14)
-                        Text("Value")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 10)
-                    .padding(.trailing, 8)
-                    .padding(.vertical, 3)
-                    Divider()
-
-                    List(selection: $selectedAttributeID) {
-                        ForEach($attributes) { $attribute in
-                            HStack(spacing: 8) {
-                                TextField("Attribute", text: $attribute.name)
-                                    .frame(width: 100)
-
-                                Picker("", selection: $attribute.type) {
-                                    Text("String").tag("S")
-                                    Text("Number").tag("N")
-                                    Text("Boolean").tag("BOOL")
-                                }
-                                .labelsHidden()
-                                .frame(width: 70)
-
-                                TemplateTokenField(
-                                    template: $attribute.valueTemplate,
-                                    textViewRef: refForAttribute(attribute.id)
-                                )
-                                .frame(height: 22)
-                            }
-                            .tag(Optional(attribute.id))
-                        }
-                    }
-                    .listStyle(.bordered(alternatesRowBackgrounds: true))
-                    .frame(height: 120)
-
-                    HStack(spacing: 0) {
-                        Button {
-                            addAttribute()
-                        } label: {
-                            Image(systemName: "plus")
-                                .frame(width: 24, height: 18)
-                        }
-                        .buttonStyle(.borderless)
-
-                        Divider()
-                            .frame(height: 14)
-
-                        Button {
-                            removeSelectedAttribute()
-                        } label: {
-                            Image(systemName: "minus")
-                                .frame(width: 24, height: 18)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(selectedAttributeID == nil)
-
-                        Spacer()
-
-                        Button("Preview") {
-                            showPreview.toggle()
-                        }
-                        .buttonStyle(.link)
-                        .popover(isPresented: $showPreview, arrowEdge: .bottom) {
-                            previewJSON()
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                }
+            if isDynamoDB {
+                dynamoDBFields
+            } else {
+                httpFields
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1460,7 +1398,7 @@ private struct PostUploadActionEditorSheet: View {
                 FlowLayout(spacing: 6) {
                     ForEach(variableReferences, id: \.token) { variable in
                         Button {
-                            insertVariableIntoActiveRow(variable.token)
+                            insertVariable(variable.token)
                         } label: {
                             Text(variable.label)
                                 .font(.caption)
@@ -1495,31 +1433,305 @@ private struct PostUploadActionEditorSheet: View {
         }
     }
 
+    // MARK: - DynamoDB Fields
+
+    @ViewBuilder
+    private var dynamoDBFields: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Table Name")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextField("Table Name", text: $tableName, prompt: Text("my-table-name"))
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Region")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextField("Region", text: $dbRegion, prompt: Text("Same as bucket"))
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Attribute Mappings")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Text("Attribute")
+                        .frame(width: 100, alignment: .leading)
+                    Divider()
+                        .frame(height: 14)
+                    Text("Type")
+                        .frame(width: 70, alignment: .leading)
+                    Divider()
+                        .frame(height: 14)
+                    Text("Value")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 10)
+                .padding(.trailing, 8)
+                .padding(.vertical, 3)
+                Divider()
+
+                List(selection: $selectedAttributeID) {
+                    ForEach($attributes) { $attribute in
+                        HStack(spacing: 8) {
+                            TextField("Attribute", text: $attribute.name)
+                                .frame(width: 100)
+
+                            Picker("", selection: $attribute.type) {
+                                Text("String").tag("S")
+                                Text("Number").tag("N")
+                                Text("Boolean").tag("BOOL")
+                            }
+                            .labelsHidden()
+                            .frame(width: 70)
+
+                            TemplateTokenField(
+                                template: $attribute.valueTemplate,
+                                textViewRef: refForAttribute(attribute.id)
+                            )
+                            .frame(height: 22)
+                        }
+                        .tag(Optional(attribute.id))
+                    }
+                }
+                .listStyle(.bordered(alternatesRowBackgrounds: true))
+                .frame(height: 120)
+
+                HStack(spacing: 0) {
+                    Button {
+                        addAttribute()
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(width: 24, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+
+                    Divider()
+                        .frame(height: 14)
+
+                    Button {
+                        removeSelectedAttribute()
+                    } label: {
+                        Image(systemName: "minus")
+                            .frame(width: 24, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selectedAttributeID == nil)
+
+                    Spacer()
+
+                    Button("Preview") {
+                        showPreview.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .popover(isPresented: $showPreview, arrowEdge: .bottom) {
+                        previewJSON()
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    // MARK: - HTTP Fields
+
+    @ViewBuilder
+    private var httpFields: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("URL")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TemplateTokenField(template: $httpURLTemplate, textViewRef: httpURLRef)
+                .frame(height: 32)
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Method")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Picker("", selection: $httpMethod) {
+                Text("GET").tag("GET")
+                Text("POST").tag("POST")
+                Text("PUT").tag("PUT")
+                Text("PATCH").tag("PATCH")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 250)
+        }
+
+        if httpMethod != "GET" {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Content Type")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $httpContentType) {
+                    ForEach(HTTPContentType.allCases) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Headers")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Text("Name")
+                        .frame(width: 120, alignment: .leading)
+                    Divider()
+                        .frame(height: 14)
+                    Text("Value")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 10)
+                .padding(.trailing, 8)
+                .padding(.vertical, 3)
+                Divider()
+
+                List(selection: $selectedHeaderID) {
+                    ForEach($httpHeaders) { $header in
+                        HStack(spacing: 8) {
+                            TextField("Header", text: $header.name)
+                                .frame(width: 120)
+
+                            TemplateTokenField(
+                                template: $header.valueTemplate,
+                                textViewRef: refForHeader(header.id)
+                            )
+                            .frame(height: 22)
+                        }
+                        .tag(Optional(header.id))
+                    }
+                }
+                .listStyle(.bordered(alternatesRowBackgrounds: true))
+                .frame(height: 80)
+
+                HStack(spacing: 0) {
+                    Button {
+                        addHeader()
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(width: 24, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+
+                    Divider()
+                        .frame(height: 14)
+
+                    Button {
+                        removeSelectedHeader()
+                    } label: {
+                        Image(systemName: "minus")
+                            .frame(width: 24, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selectedHeaderID == nil)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+            }
+        }
+
+        if httpMethod != "GET" {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Body")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                TemplateTokenField(template: $httpBodyTemplate, textViewRef: httpBodyRef)
+                    .frame(height: 120)
+            }
+        }
+
+        HStack {
+            Spacer()
+            Button("Preview") {
+                showPreview.toggle()
+            }
+            .buttonStyle(.link)
+            .popover(isPresented: $showPreview, arrowEdge: .bottom) {
+                previewHTTPRequest()
+            }
+        }
+    }
+
+    // MARK: - Load / Save
+
     private func loadFromAction() {
         label = action.label
         enabled = action.enabled
         switch action.actionType {
         case .dynamoDB(let config):
             tableName = config.tableName
-            region = config.region
+            dbRegion = config.region
             attributes = config.attributes
+        case .http(let config):
+            httpURLTemplate = config.urlTemplate
+            httpMethod = config.method
+            httpContentType = config.contentType
+            httpHeaders = config.headers
+            httpBodyTemplate = config.bodyTemplate
         }
     }
 
     private func save() {
-        var cleanedAttributes: [DynamoDBAttribute] = []
-        cleanedAttributes.reserveCapacity(attributes.count)
-        for attribute in attributes {
-            let name = trim(attribute.name)
-            if name.isEmpty {
-                continue
+        let actionType: PostUploadActionType
+
+        switch action.actionType {
+        case .dynamoDB:
+            var cleanedAttributes: [DynamoDBAttribute] = []
+            cleanedAttributes.reserveCapacity(attributes.count)
+            for attribute in attributes {
+                let name = trim(attribute.name)
+                if name.isEmpty { continue }
+                cleanedAttributes.append(
+                    DynamoDBAttribute(
+                        id: attribute.id,
+                        name: name,
+                        type: trim(attribute.type).uppercased(),
+                        valueTemplate: attribute.valueTemplate
+                    )
+                )
             }
-            cleanedAttributes.append(
-                DynamoDBAttribute(
-                    id: attribute.id,
-                    name: name,
-                    type: trim(attribute.type).uppercased(),
-                    valueTemplate: attribute.valueTemplate
+            actionType = .dynamoDB(
+                DynamoDBActionConfig(
+                    tableName: trim(tableName),
+                    region: trim(dbRegion),
+                    attributes: cleanedAttributes
+                )
+            )
+
+        case .http:
+            var cleanedHeaders: [HTTPHeader] = []
+            for header in httpHeaders {
+                let name = trim(header.name)
+                if name.isEmpty { continue }
+                cleanedHeaders.append(
+                    HTTPHeader(id: header.id, name: name, valueTemplate: header.valueTemplate)
+                )
+            }
+            actionType = .http(
+                HTTPActionConfig(
+                    urlTemplate: trim(httpURLTemplate),
+                    method: httpMethod,
+                    contentType: httpContentType,
+                    headers: cleanedHeaders,
+                    bodyTemplate: httpMethod == "GET" ? "" : httpBodyTemplate
                 )
             )
         }
@@ -1528,18 +1740,14 @@ private struct PostUploadActionEditorSheet: View {
             id: action.id,
             enabled: enabled,
             label: trim(label),
-            actionType: .dynamoDB(
-                DynamoDBActionConfig(
-                    tableName: trim(tableName),
-                    region: trim(region),
-                    attributes: cleanedAttributes
-                )
-            )
+            actionType: actionType
         )
 
         onSave(updatedAction)
         dismiss()
     }
+
+    // MARK: - DynamoDB Helpers
 
     private func addAttribute() {
         let attr = DynamoDBAttribute(name: "", type: "S", valueTemplate: "")
@@ -1563,13 +1771,66 @@ private struct PostUploadActionEditorSheet: View {
         return ref
     }
 
-    private func insertVariableIntoActiveRow(_ token: String) {
-        // Find the ref whose textView is first responder, or fall back to selected row
-        let targetRef: TemplateTextViewRef? = attributeRefs.values.first(where: {
-            $0.textView?.window?.firstResponder === $0.textView
-        }) ?? selectedAttributeID.flatMap({ attributeRefs[$0] })
-        targetRef?.insertAtCursor("${\(token)}")
+    // MARK: - HTTP Helpers
+
+    private func addHeader() {
+        let header = HTTPHeader(name: "", valueTemplate: "")
+        httpHeaders.append(header)
+        selectedHeaderID = header.id
     }
+
+    private func removeSelectedHeader() {
+        guard let selectedHeaderID else { return }
+        headerRefs.removeValue(forKey: selectedHeaderID)
+        httpHeaders.removeAll { $0.id == selectedHeaderID }
+        self.selectedHeaderID = nil
+    }
+
+    private func refForHeader(_ id: UUID) -> TemplateTextViewRef {
+        if let ref = headerRefs[id] { return ref }
+        let ref = TemplateTextViewRef()
+        DispatchQueue.main.async {
+            headerRefs[id] = ref
+        }
+        return ref
+    }
+
+    // MARK: - Variable Insertion (unified)
+
+    private func insertVariable(_ token: String) {
+        // Check all TemplateTextViewRefs for the one that's first responder
+        let allRefs: [TemplateTextViewRef] = {
+            var refs: [TemplateTextViewRef] = []
+            if isDynamoDB {
+                refs.append(contentsOf: attributeRefs.values)
+            } else {
+                refs.append(httpURLRef)
+                refs.append(httpBodyRef)
+                refs.append(contentsOf: headerRefs.values)
+            }
+            return refs
+        }()
+
+        let activeRef = allRefs.first(where: {
+            $0.textView?.window?.firstResponder === $0.textView
+        })
+
+        if let activeRef {
+            activeRef.insertAtCursor("${\(token)}")
+            return
+        }
+
+        // Fallback: for DynamoDB fall back to selected attribute row, for HTTP fall back to body
+        if isDynamoDB {
+            if let selectedAttributeID, let ref = attributeRefs[selectedAttributeID] {
+                ref.insertAtCursor("${\(token)}")
+            }
+        } else {
+            httpBodyRef.insertAtCursor("${\(token)}")
+        }
+    }
+
+    // MARK: - DynamoDB Preview
 
     @ViewBuilder
     private func previewJSON() -> some View {
@@ -1578,7 +1839,7 @@ private struct PostUploadActionEditorSheet: View {
             "renamedFilename": "a1b2c3.png",
             "s3Key": "public/a1b2c3.png",
             "bucket": "my-bucket",
-            "region": region.isEmpty ? "us-east-1" : region,
+            "region": dbRegion.isEmpty ? "us-east-1" : dbRegion,
             "url": "https://cdn.example.com/public/a1b2c3.png",
             "fileSize": "284521",
             "contentType": "image/png",
@@ -1613,6 +1874,37 @@ private struct PostUploadActionEditorSheet: View {
             .textSelection(.enabled)
             .padding(12)
             .frame(minWidth: 360)
+    }
+
+    // MARK: - HTTP Preview
+
+    @ViewBuilder
+    private func previewHTTPRequest() -> some View {
+        let exampleValues: [String: String] = [
+            "originalFilename": "photo.png",
+            "renamedFilename": "a1b2c3.png",
+            "s3Key": "public/a1b2c3.png",
+            "bucket": "my-bucket",
+            "region": "us-east-1",
+            "url": "https://cdn.example.com/public/a1b2c3.png",
+            "fileSize": "284521",
+            "contentType": "image/png",
+            "contentHash": "sha256:abc123...",
+            "timestamp": "2026-02-22T10:30:00Z"
+        ]
+        let resolved: String = {
+            var result = httpBodyTemplate
+            for (key, val) in exampleValues {
+                result = result.replacingOccurrences(of: "${\(key)}", with: val)
+            }
+            return result
+        }()
+
+        Text(resolved)
+            .font(.system(size: 11, design: .monospaced))
+            .textSelection(.enabled)
+            .padding(8)
+            .frame(minWidth: 300)
     }
 
     private func trim(_ value: String) -> String {

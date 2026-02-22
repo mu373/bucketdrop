@@ -21,8 +21,58 @@ struct DynamoDBActionConfig: Codable, Hashable, Sendable {
     var attributes: [DynamoDBAttribute] = []
 }
 
+struct HTTPHeader: Codable, Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var name: String = ""
+    var valueTemplate: String = ""   // supports ${token} variables
+}
+
+enum HTTPContentType: String, Codable, CaseIterable, Identifiable, Sendable {
+    case json = "application/json"
+    case form = "application/x-www-form-urlencoded"
+    case text = "text/plain"
+    case none = ""
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .json: return "JSON"
+        case .form: return "Form URL-Encoded"
+        case .text: return "Plain Text"
+        case .none: return "None"
+        }
+    }
+}
+
+struct HTTPActionConfig: Codable, Hashable, Sendable {
+    var urlTemplate: String = ""     // supports ${token} variables
+    var method: String = "POST"      // POST | PUT | PATCH
+    var contentType: HTTPContentType = .json
+    var headers: [HTTPHeader] = []
+    var bodyTemplate: String = ""    // supports ${token} variables
+
+    init(urlTemplate: String = "", method: String = "POST", contentType: HTTPContentType = .json, headers: [HTTPHeader] = [], bodyTemplate: String = "") {
+        self.urlTemplate = urlTemplate
+        self.method = method
+        self.contentType = contentType
+        self.headers = headers
+        self.bodyTemplate = bodyTemplate
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        urlTemplate = try container.decodeIfPresent(String.self, forKey: .urlTemplate) ?? ""
+        method = try container.decodeIfPresent(String.self, forKey: .method) ?? "POST"
+        contentType = try container.decodeIfPresent(HTTPContentType.self, forKey: .contentType) ?? .json
+        headers = try container.decodeIfPresent([HTTPHeader].self, forKey: .headers) ?? []
+        bodyTemplate = try container.decodeIfPresent(String.self, forKey: .bodyTemplate) ?? ""
+    }
+}
+
 enum PostUploadActionType: Codable, Hashable, Sendable {
     case dynamoDB(DynamoDBActionConfig)
+    case http(HTTPActionConfig)
 }
 
 struct PostUploadAction: Codable, Identifiable, Hashable, Sendable {
