@@ -19,6 +19,8 @@ actor S3Service {
     struct UploadResult {
         let key: String
         let url: String
+        let contentType: String
+        let contentHash: String
     }
 
     private struct BucketConfigValues: Sendable {
@@ -125,6 +127,7 @@ actor S3Service {
 
         let keyWithoutPrefix: String
         let basename: String
+        var contentHash = ""
         switch config.renameMode {
         case .original:
             keyWithoutPrefix = filename
@@ -163,6 +166,7 @@ actor S3Service {
             case .md5:
                 hashHex = Insecure.MD5.hash(data: data).hexString
             }
+            contentHash = hashHex
             let renamed = ext.isEmpty ? hashHex : "\(hashHex).\(ext)"
             keyWithoutPrefix = renamed
             basename = renamed
@@ -179,6 +183,7 @@ actor S3Service {
             case .md5:
                 hashHex = Insecure.MD5.hash(data: data).hexString
             }
+            contentHash = hashHex
 
             let replacements: [(String, String)] = [
                 ("${original}", filename),
@@ -210,7 +215,12 @@ actor S3Service {
         try await putObject(key: key, data: data, contentType: contentType, config: config, progress: progress)
 
         let url = buildURL(key: key, config: config, template: config.urlTemplates.first, basename: basename)
-        return UploadResult(key: key, url: url)
+        return UploadResult(
+            key: key,
+            url: url,
+            contentType: contentType,
+            contentHash: contentHash
+        )
     }
 
     // MARK: - List Objects
@@ -239,13 +249,16 @@ actor S3Service {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
-        let headers = try signRequest(
+        let headers = try AWSSigner.signRequest(
             method: "GET",
             path: signingPath,
             query: query,
             headers: ["host": host],
             payload: Data(),
-            config: config
+            accessKey: config.accessKeyId,
+            secretKey: config.secretAccessKey,
+            region: config.region,
+            service: "s3"
         )
 
         for (key, value) in headers {
@@ -292,13 +305,16 @@ actor S3Service {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
-        let headers = try signRequest(
+        let headers = try AWSSigner.signRequest(
             method: "GET",
             path: signingPath,
             query: "",
             headers: ["host": host],
             payload: Data(),
-            config: config
+            accessKey: config.accessKeyId,
+            secretKey: config.secretAccessKey,
+            region: config.region,
+            service: "s3"
         )
 
         for (key, value) in headers {
@@ -376,13 +392,16 @@ actor S3Service {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
 
-        let headers = try signRequest(
+        let headers = try AWSSigner.signRequest(
             method: "DELETE",
             path: signingPath,
             query: "",
             headers: ["host": host],
             payload: Data(),
-            config: config
+            accessKey: config.accessKeyId,
+            secretKey: config.secretAccessKey,
+            region: config.region,
+            service: "s3"
         )
 
         for (key, value) in headers {
@@ -423,7 +442,7 @@ actor S3Service {
         request.httpMethod = "PUT"
         request.httpBody = data
 
-        let headers = try signRequest(
+        let headers = try AWSSigner.signRequest(
             method: "PUT",
             path: signingPath,
             query: "",
@@ -432,7 +451,10 @@ actor S3Service {
                 "content-type": contentType
             ],
             payload: data,
-            config: config
+            accessKey: config.accessKeyId,
+            secretKey: config.secretAccessKey,
+            region: config.region,
+            service: "s3"
         )
 
         for (key, value) in headers {
@@ -492,79 +514,6 @@ actor S3Service {
             return "/\(encodedKey)"
         }
         return "/"
-    }
-
-    private func signRequest(
-        method: String,
-        path: String,
-        query: String,
-        headers: [String: String],
-        payload: Data,
-        config: BucketConfigValues
-    ) throws -> [String: String] {
-        let accessKey = config.accessKeyId
-        let secretKey = config.secretAccessKey
-        let region = config.region
-        let service = "s3"
-
-        let now = Date()
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
-        dateFormatter.timeZone = TimeZone(identifier: "UTC")
-
-        let amzDate = dateFormatter.string(from: now)
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: ":", with: "")
-        let dateStamp = String(amzDate.prefix(8))
-
-        let payloadHash = SHA256.hash(data: payload).hexString
-
-        var allHeaders = headers
-        allHeaders["x-amz-date"] = amzDate
-        allHeaders["x-amz-content-sha256"] = payloadHash
-
-        let sortedHeaders = allHeaders.sorted { $0.key.lowercased() < $1.key.lowercased() }
-        let canonicalHeaders = sortedHeaders
-            .map { "\($0.key.lowercased()):\($0.value.trimmingCharacters(in: .whitespaces))" }
-            .joined(separator: "\n") + "\n"
-        let signedHeaders = sortedHeaders.map { $0.key.lowercased() }.joined(separator: ";")
-
-        let canonicalRequest = [
-            method,
-            path,
-            query,
-            canonicalHeaders,
-            signedHeaders,
-            payloadHash
-        ].joined(separator: "\n")
-
-        let canonicalRequestHash = SHA256.hash(data: Data(canonicalRequest.utf8)).hexString
-
-        let credentialScope = "\(dateStamp)/\(region)/\(service)/aws4_request"
-        let stringToSign = [
-            "AWS4-HMAC-SHA256",
-            amzDate,
-            credentialScope,
-            canonicalRequestHash
-        ].joined(separator: "\n")
-
-        let kDate = hmacSHA256(key: Data("AWS4\(secretKey)".utf8), data: Data(dateStamp.utf8))
-        let kRegion = hmacSHA256(key: kDate, data: Data(region.utf8))
-        let kService = hmacSHA256(key: kRegion, data: Data(service.utf8))
-        let kSigning = hmacSHA256(key: kService, data: Data("aws4_request".utf8))
-        let signature = hmacSHA256(key: kSigning, data: Data(stringToSign.utf8)).hexString
-
-        let authorization = "AWS4-HMAC-SHA256 Credential=\(accessKey)/\(credentialScope), SignedHeaders=\(signedHeaders), Signature=\(signature)"
-
-        var result = allHeaders
-        result["authorization"] = authorization
-        return result
-    }
-
-    private func hmacSHA256(key: Data, data: Data) -> Data {
-        let key = SymmetricKey(data: key)
-        let signature = HMAC<SHA256>.authenticationCode(for: data, using: key)
-        return Data(signature)
     }
 
     private func mimeType(for ext: String) -> String {
@@ -779,23 +728,5 @@ struct S3Object: Identifiable {
 
     var filename: String {
         (key as NSString).lastPathComponent
-    }
-}
-
-extension SHA256Digest {
-    nonisolated var hexString: String {
-        self.map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-extension Insecure.MD5Digest {
-    nonisolated var hexString: String {
-        self.map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-extension Data {
-    nonisolated var hexString: String {
-        self.map { String(format: "%02x", $0) }.joined()
     }
 }

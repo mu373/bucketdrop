@@ -393,7 +393,7 @@ struct ContentView: View {
                     }
                 }
 
-                let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
+                let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
 
                 // Add to live S3 object list
                 let newObject = S3Object(key: result.key, size: fileSize, lastModified: Date())
@@ -407,6 +407,38 @@ struct ContentView: View {
                 tasks[index].progress = 1
                 tasks[index].resultURL = result.url
                 successfulURLs.append(result.url)
+
+                let enabledActions = config.postUploadActions.filter { $0.enabled }
+                if !enabledActions.isEmpty {
+                    let metadata = UploadMetadata(
+                        originalFilename: tasks[index].filename,
+                        renamedFilename: (result.key as NSString).lastPathComponent,
+                        s3Key: result.key,
+                        bucket: config.bucket,
+                        region: config.region,
+                        url: result.url,
+                        fileSize: fileSize,
+                        contentType: result.contentType,
+                        contentHash: result.contentHash,
+                        timestamp: ISO8601DateFormatter().string(from: Date())
+                    )
+
+                    for action in enabledActions {
+                        switch action.actionType {
+                        case .dynamoDB(let dbConfig):
+                            do {
+                                try await DynamoDBService.shared.putItem(
+                                    action: dbConfig,
+                                    metadata: metadata,
+                                    credentials: (config.accessKeyId, config.secretAccessKey),
+                                    bucketRegion: config.region
+                                )
+                            } catch {
+                                print("[BucketDrop] DynamoDB error (\(action.label)): \(error)")
+                            }
+                        }
+                    }
+                }
             } catch {
                 tasks[index].status = .failed(error.localizedDescription)
                 errorMessage = "\(displayName(for: config)): \(error.localizedDescription)"

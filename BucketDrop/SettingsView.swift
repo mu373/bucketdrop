@@ -24,6 +24,7 @@ private struct BucketConfigDraft: Equatable {
     var hashAlgorithm: String = HashAlgorithm.sha256.rawValue
     var customRenameTemplate: String = "${original}"
     var copyURLAfterUpload: Bool = true
+    var postUploadActions: [PostUploadAction] = []
 
     init() { }
 
@@ -43,6 +44,7 @@ private struct BucketConfigDraft: Equatable {
         hashAlgorithm = config.hashAlgorithm
         customRenameTemplate = config.customRenameTemplate
         copyURLAfterUpload = config.copyURLAfterUpload
+        postUploadActions = config.postUploadActions
     }
 }
 
@@ -58,6 +60,8 @@ struct SettingsView: View {
     @State private var testResult: TestResult?
     @State private var selectedTemplateID: UUID?
     @State private var editingTemplate: URLTemplate?
+    @State private var selectedPostUploadActionID: UUID?
+    @State private var editingPostUploadAction: PostUploadAction?
     @State private var renameTextViewRef = TemplateTextViewRef()
 
     enum TestResult {
@@ -417,6 +421,80 @@ struct SettingsView: View {
                     )
                 }
 
+                Section("Post-Upload Actions") {
+                    VStack(spacing: 0) {
+                        List(selection: $selectedPostUploadActionID) {
+                            ForEach(draft.postUploadActions) { action in
+                                HStack(spacing: 8) {
+                                    Text(postUploadActionDisplayLabel(action))
+                                        .lineLimit(1)
+
+                                    Spacer(minLength: 8)
+
+                                    Text(postUploadActionTypeLabel(action))
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.quaternary, in: .capsule)
+
+                                    Toggle("", isOn: postUploadActionEnabledBinding(action.id))
+                                        .labelsHidden()
+                                }
+                                .tag(Optional(action.id))
+                            }
+                        }
+                        .listStyle(.bordered(alternatesRowBackgrounds: true))
+                        .frame(height: 120)
+                        .onDoubleClick {
+                            openSelectedPostUploadActionEditor()
+                        }
+
+                        Divider()
+
+                        HStack(spacing: 0) {
+                            Menu {
+                                Button("DynamoDB") {
+                                    addPostUploadAction(type: .dynamoDB(DynamoDBActionConfig()))
+                                }
+                                // future: Button("HTTP Request") { ... }
+                            } label: {
+                                Image(systemName: "plus")
+                                    .frame(width: 24, height: 18)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+
+                            Divider()
+                                .frame(height: 14)
+
+                            Button {
+                                removeSelectedPostUploadAction()
+                            } label: {
+                                Image(systemName: "minus")
+                                    .frame(width: 24, height: 18)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(selectedPostUploadActionID == nil)
+
+                            Spacer()
+
+                            Button("Edit") {
+                                openSelectedPostUploadActionEditor()
+                            }
+                            .buttonStyle(.link)
+                            .disabled(selectedPostUploadActionID == nil)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                    }
+                }
+                .sheet(item: $editingPostUploadAction) { action in
+                    PostUploadActionEditorSheet(action: action) { updatedAction in
+                        updatePostUploadAction(updatedAction)
+                    }
+                }
+
                 Section {
                     HStack {
                         Button("Test Connection") {
@@ -488,6 +566,7 @@ struct SettingsView: View {
         config.hashAlgorithm = draft.hashAlgorithm
         config.customRenameTemplate = draft.customRenameTemplate
         config.copyURLAfterUpload = draft.copyURLAfterUpload
+        config.postUploadActions = draft.postUploadActions
 
         try? modelContext.save()
     }
@@ -516,6 +595,10 @@ struct SettingsView: View {
         }
 
         draft = BucketConfigDraft(config: selectedConfig)
+        selectedTemplateID = nil
+        selectedPostUploadActionID = nil
+        editingTemplate = nil
+        editingPostUploadAction = nil
         testResult = nil
     }
 
@@ -549,12 +632,15 @@ struct SettingsView: View {
             region: config.region,
             endpoint: config.endpoint,
             keyPrefix: config.keyPrefix,
+            uriScheme: config.uriScheme,
             sortOrder: nextOrder,
             urlTemplates: config.urlTemplates,
             renameMode: config.renameMode,
             dateTimeFormat: config.dateTimeFormat,
             hashAlgorithm: config.hashAlgorithm,
-            customRenameTemplate: config.customRenameTemplate
+            customRenameTemplate: config.customRenameTemplate,
+            copyURLAfterUpload: config.copyURLAfterUpload,
+            postUploadActions: config.postUploadActions
         )
         modelContext.insert(duplicatedConfig)
         try? modelContext.save()
@@ -614,6 +700,72 @@ struct SettingsView: View {
         .buttonStyle(.plain)
         .background(.quaternary, in: .capsule)
         .draggable("${\(token)}")
+    }
+
+    private func postUploadActionDisplayLabel(_ action: PostUploadAction) -> String {
+        let label = trim(action.label)
+        if !label.isEmpty {
+            return label
+        }
+
+        switch action.actionType {
+        case .dynamoDB:
+            return "DynamoDB Action"
+        }
+    }
+
+    private func postUploadActionTypeLabel(_ action: PostUploadAction) -> String {
+        switch action.actionType {
+        case .dynamoDB:
+            return "DynamoDB"
+        }
+    }
+
+    private func postUploadActionEnabledBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: {
+                draft.postUploadActions.first(where: { $0.id == id })?.enabled ?? false
+            },
+            set: { enabled in
+                guard let index = draft.postUploadActions.firstIndex(where: { $0.id == id }) else { return }
+                draft.postUploadActions[index].enabled = enabled
+            }
+        )
+    }
+
+    private func addPostUploadAction(type: PostUploadActionType) {
+        let defaultLabel: String
+        switch type {
+        case .dynamoDB: defaultLabel = "DynamoDB Action"
+        }
+        let action = PostUploadAction(
+            enabled: true,
+            label: defaultLabel,
+            actionType: type
+        )
+        draft.postUploadActions.append(action)
+        selectedPostUploadActionID = action.id
+        editingPostUploadAction = action
+    }
+
+    private func removeSelectedPostUploadAction() {
+        guard let selectedPostUploadActionID else { return }
+        draft.postUploadActions.removeAll { $0.id == selectedPostUploadActionID }
+        self.selectedPostUploadActionID = nil
+    }
+
+    private func openSelectedPostUploadActionEditor() {
+        guard let selectedPostUploadActionID,
+              let action = draft.postUploadActions.first(where: { $0.id == selectedPostUploadActionID }) else {
+            return
+        }
+        editingPostUploadAction = action
+    }
+
+    private func updatePostUploadAction(_ updatedAction: PostUploadAction) {
+        guard let index = draft.postUploadActions.firstIndex(where: { $0.id == updatedAction.id }) else { return }
+        draft.postUploadActions[index] = updatedAction
+        selectedPostUploadActionID = updatedAction.id
     }
 
     private func applyProviderDefaults(_ provider: BucketProvider) {
@@ -758,7 +910,17 @@ private let pillDisplayNames: [String: String] = [
     "second": "Second",
     "timestamp": "Timestamp",
     "hash": "Hash",
-    "uuid": "UUID"
+    "uuid": "UUID",
+    // DynamoDB action variables
+    "originalFilename": "Original Filename",
+    "renamedFilename": "Renamed Filename",
+    "s3Key": "S3 Key",
+    "bucket": "Bucket",
+    "region": "Region",
+    "url": "URL",
+    "fileSize": "File Size",
+    "contentType": "Content Type",
+    "contentHash": "Content Hash"
 ]
 
 /// Custom attachment cell that draws a capsule pill for a variable token.
@@ -1140,6 +1302,368 @@ private struct TemplateEditorSheet: View {
             label = template.label
             templateValue = template.template
         }
+    }
+}
+
+private struct PostUploadActionEditorSheet: View {
+    let action: PostUploadAction
+    let onSave: (PostUploadAction) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var label: String = ""
+    @State private var enabled: Bool = true
+    @State private var tableName: String = ""
+    @State private var region: String = ""
+    @State private var attributes: [DynamoDBAttribute] = []
+    @State private var selectedAttributeID: UUID?
+    @State private var attributeRefs: [UUID: TemplateTextViewRef] = [:]
+    @State private var showPreview = false
+
+    private let variableReferences: [(token: String, label: String)] = [
+        ("originalFilename", "Original Filename"),
+        ("renamedFilename", "Renamed Filename"),
+        ("s3Key", "S3 Key"),
+        ("bucket", "Bucket"),
+        ("region", "Region"),
+        ("url", "URL"),
+        ("fileSize", "File Size"),
+        ("contentType", "Content Type"),
+        ("contentHash", "Content Hash"),
+        ("timestamp", "Timestamp")
+    ]
+
+    private var canSave: Bool {
+        !trim(tableName).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Edit Action")
+                .font(.headline)
+
+            Toggle("Enabled", isOn: $enabled)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Label")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                TextField("Label", text: $label, prompt: Text("File metadata table"))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Table Name")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                TextField("Table Name", text: $tableName, prompt: Text("my-table-name"))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Region")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                TextField("Region", text: $region, prompt: Text("Same as bucket"))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Attribute Mappings")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Text("Attribute")
+                            .frame(width: 100, alignment: .leading)
+                        Divider()
+                            .frame(height: 14)
+                        Text("Type")
+                            .frame(width: 70, alignment: .leading)
+                        Divider()
+                            .frame(height: 14)
+                        Text("Value")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 10)
+                    .padding(.trailing, 8)
+                    .padding(.vertical, 3)
+                    Divider()
+
+                    List(selection: $selectedAttributeID) {
+                        ForEach($attributes) { $attribute in
+                            HStack(spacing: 8) {
+                                TextField("Attribute", text: $attribute.name)
+                                    .frame(width: 100)
+
+                                Picker("", selection: $attribute.type) {
+                                    Text("String").tag("S")
+                                    Text("Number").tag("N")
+                                    Text("Boolean").tag("BOOL")
+                                }
+                                .labelsHidden()
+                                .frame(width: 70)
+
+                                TemplateTokenField(
+                                    template: $attribute.valueTemplate,
+                                    textViewRef: refForAttribute(attribute.id)
+                                )
+                                .frame(height: 22)
+                            }
+                            .tag(Optional(attribute.id))
+                        }
+                    }
+                    .listStyle(.bordered(alternatesRowBackgrounds: true))
+                    .frame(height: 120)
+
+                    HStack(spacing: 0) {
+                        Button {
+                            addAttribute()
+                        } label: {
+                            Image(systemName: "plus")
+                                .frame(width: 24, height: 18)
+                        }
+                        .buttonStyle(.borderless)
+
+                        Divider()
+                            .frame(height: 14)
+
+                        Button {
+                            removeSelectedAttribute()
+                        } label: {
+                            Image(systemName: "minus")
+                                .frame(width: 24, height: 18)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(selectedAttributeID == nil)
+
+                        Spacer()
+
+                        Button("Preview") {
+                            showPreview.toggle()
+                        }
+                        .buttonStyle(.link)
+                        .popover(isPresented: $showPreview, arrowEdge: .bottom) {
+                            previewJSON()
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Variables")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                FlowLayout(spacing: 6) {
+                    ForEach(variableReferences, id: \.token) { variable in
+                        Button {
+                            insertVariableIntoActiveRow(variable.token)
+                        } label: {
+                            Text(variable.label)
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .background(.quaternary, in: .capsule)
+                        .help("${\(variable.token)}")
+                    }
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Save") {
+                    save()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
+            }
+        }
+        .padding(20)
+        .frame(width: 680)
+        .onAppear {
+            loadFromAction()
+        }
+    }
+
+    private func loadFromAction() {
+        label = action.label
+        enabled = action.enabled
+        switch action.actionType {
+        case .dynamoDB(let config):
+            tableName = config.tableName
+            region = config.region
+            attributes = config.attributes
+        }
+    }
+
+    private func save() {
+        var cleanedAttributes: [DynamoDBAttribute] = []
+        cleanedAttributes.reserveCapacity(attributes.count)
+        for attribute in attributes {
+            let name = trim(attribute.name)
+            if name.isEmpty {
+                continue
+            }
+            cleanedAttributes.append(
+                DynamoDBAttribute(
+                    id: attribute.id,
+                    name: name,
+                    type: trim(attribute.type).uppercased(),
+                    valueTemplate: attribute.valueTemplate
+                )
+            )
+        }
+
+        let updatedAction = PostUploadAction(
+            id: action.id,
+            enabled: enabled,
+            label: trim(label),
+            actionType: .dynamoDB(
+                DynamoDBActionConfig(
+                    tableName: trim(tableName),
+                    region: trim(region),
+                    attributes: cleanedAttributes
+                )
+            )
+        )
+
+        onSave(updatedAction)
+        dismiss()
+    }
+
+    private func addAttribute() {
+        let attr = DynamoDBAttribute(name: "", type: "S", valueTemplate: "")
+        attributes.append(attr)
+        selectedAttributeID = attr.id
+    }
+
+    private func removeSelectedAttribute() {
+        guard let selectedAttributeID else { return }
+        attributeRefs.removeValue(forKey: selectedAttributeID)
+        attributes.removeAll { $0.id == selectedAttributeID }
+        self.selectedAttributeID = nil
+    }
+
+    private func refForAttribute(_ id: UUID) -> TemplateTextViewRef {
+        if let ref = attributeRefs[id] { return ref }
+        let ref = TemplateTextViewRef()
+        DispatchQueue.main.async {
+            attributeRefs[id] = ref
+        }
+        return ref
+    }
+
+    private func insertVariableIntoActiveRow(_ token: String) {
+        // Find the ref whose textView is first responder, or fall back to selected row
+        let targetRef: TemplateTextViewRef? = attributeRefs.values.first(where: {
+            $0.textView?.window?.firstResponder === $0.textView
+        }) ?? selectedAttributeID.flatMap({ attributeRefs[$0] })
+        targetRef?.insertAtCursor("${\(token)}")
+    }
+
+    @ViewBuilder
+    private func previewJSON() -> some View {
+        let exampleValues: [String: String] = [
+            "originalFilename": "photo.png",
+            "renamedFilename": "a1b2c3.png",
+            "s3Key": "public/a1b2c3.png",
+            "bucket": "my-bucket",
+            "region": region.isEmpty ? "us-east-1" : region,
+            "url": "https://cdn.example.com/public/a1b2c3.png",
+            "fileSize": "284521",
+            "contentType": "image/png",
+            "contentHash": "sha256:abc123...",
+            "timestamp": "2026-02-22T10:30:00Z"
+        ]
+
+        let itemFields = attributes.compactMap { attr -> String? in
+            let name = trim(attr.name)
+            guard !name.isEmpty else { return nil }
+            var resolved = attr.valueTemplate
+            for (key, val) in exampleValues {
+                resolved = resolved.replacingOccurrences(of: "${\(key)}", with: val)
+            }
+            let escaped = resolved
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "      \"\(name)\": { \"\(attr.type)\": \"\(escaped)\" }"
+        }
+
+        let json = """
+        {
+          "TableName": "\(trim(tableName).isEmpty ? "my-table" : trim(tableName))",
+          "Item": {
+        \(itemFields.joined(separator: ",\n"))
+          }
+        }
+        """
+
+        Text(json)
+            .font(.system(size: 11, design: .monospaced))
+            .textSelection(.enabled)
+            .padding(12)
+            .frame(minWidth: 360)
+    }
+
+    private func trim(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - FlowLayout
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        var height: CGFloat = 0
+        for (i, row) in rows.enumerated() {
+            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            height += rowHeight + (i > 0 ? spacing : 0)
+        }
+        return CGSize(width: proposal.width ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        var y = bounds.minY
+        for row in rows {
+            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            var x = bounds.minX
+            for subview in row {
+                let size = subview.sizeThatFits(.unspecified)
+                subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += rowHeight + spacing
+        }
+    }
+
+    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[LayoutSubviews.Element]] {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [[LayoutSubviews.Element]] = [[]]
+        var currentWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentWidth + size.width > maxWidth && !rows[rows.count - 1].isEmpty {
+                rows.append([])
+                currentWidth = 0
+            }
+            rows[rows.count - 1].append(subview)
+            currentWidth += size.width + spacing
+        }
+        return rows
     }
 }
 

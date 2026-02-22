@@ -8,6 +8,30 @@
 import Foundation
 import SwiftData
 
+struct DynamoDBAttribute: Codable, Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var name: String = ""
+    var type: String = "S" // S, N, BOOL
+    var valueTemplate: String = ""
+}
+
+struct DynamoDBActionConfig: Codable, Hashable, Sendable {
+    var tableName: String = ""
+    var region: String = ""
+    var attributes: [DynamoDBAttribute] = []
+}
+
+enum PostUploadActionType: Codable, Hashable, Sendable {
+    case dynamoDB(DynamoDBActionConfig)
+}
+
+struct PostUploadAction: Codable, Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var enabled: Bool = true
+    var label: String = ""
+    var actionType: PostUploadActionType
+}
+
 struct URLTemplate: Codable, Identifiable, Hashable, Sendable {
     var id: UUID
     var label: String
@@ -165,6 +189,7 @@ final class BucketConfig {
     var hashAlgorithm: String = HashAlgorithm.sha256.rawValue
     var customRenameTemplate: String = "${original}"
     var copyURLAfterUpload: Bool = true
+    var postUploadActions: [PostUploadAction] = []
 
     init(
         id: UUID = UUID(),
@@ -183,7 +208,8 @@ final class BucketConfig {
         dateTimeFormat: String = DateTimeFormat.unix.rawValue,
         hashAlgorithm: String = HashAlgorithm.sha256.rawValue,
         customRenameTemplate: String = "${ORIGINAL}",
-        copyURLAfterUpload: Bool = true
+        copyURLAfterUpload: Bool = true,
+        postUploadActions: [PostUploadAction] = []
     ) {
         self.id = id
         self.name = name
@@ -202,5 +228,6 @@ final class BucketConfig {
         self.hashAlgorithm = hashAlgorithm
         self.customRenameTemplate = customRenameTemplate
         self.copyURLAfterUpload = copyURLAfterUpload
+        self.postUploadActions = postUploadActions
     }
 }
