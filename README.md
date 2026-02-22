@@ -13,6 +13,7 @@ Forked from [fayazara/bucketdrop](https://github.com/fayazara/bucketdrop) with m
 - **Drag & drop or click to upload**: drop files onto any configured drop zone, or click to select from Finder
 - **Unified file list**: browse all objects across every configured bucket in a single date-sorted list
 - **Quick Look, download, delete**: double-click to preview, hover for action buttons
+- **Post-upload actions**: trigger actions after each upload — write metadata to DynamoDB or send an HTTP request to any webhook/API endpoint
 - **No AWS SDK**: all S3 API calls and AWS Signature V4 signing are implemented in pure Swift using CryptoKit
 
 ## Requirements
@@ -40,8 +41,9 @@ Forked from [fayazara/bucketdrop](https://github.com/fayazara/bucketdrop) with m
    - **Key Prefix**: optional path prefix (e.g. `uploads/`)
 5. Optionally configure **Rename on Upload** (original, dateTime, hash, or custom template)
 6. Optionally configure **Copy Formats**: add, remove, or reorder URL templates; the first one is the default
-7. Click **Test Connection** to verify
-8. Changes are saved automatically (there is no Save button)
+7. Optionally configure **Post-Upload Actions** (see below)
+8. Click **Test Connection** to verify
+9. Changes are saved automatically (there is no Save button)
 
 Add more buckets by clicking **+** again. You can also right-click a config to duplicate it.
 
@@ -61,6 +63,41 @@ Add more buckets by clicking **+** again. You can also right-click a config to d
 - **Hover** a row to reveal action buttons: copy URL, download, delete
 - **Right-click** the copy button to choose an alternate URL template
 - **Double-click** a row to preview the file with Quick Look
+
+## Post-Upload Actions
+
+Post-upload actions run automatically after each successful upload. You can add multiple actions per bucket from the **Post-Upload Actions** section in Settings.
+
+### DynamoDB
+
+Write upload metadata to a DynamoDB table. Configure the table name, region, and attribute mappings. Each attribute value supports template variables.
+
+### HTTP Request
+
+Send upload metadata to any HTTP endpoint (webhooks, APIs, logging services, etc.). Configure:
+
+- **URL**: the endpoint URL (supports template variables)
+- **Method**: GET, POST, PUT, or PATCH
+- **Content Type**: JSON, Form URL-Encoded, Plain Text, or None
+- **Headers**: custom request headers (values support template variables)
+- **Body**: request body template (hidden for GET)
+
+### Template variables
+
+Both action types support these variables in their template fields:
+
+| Variable | Description |
+|---|---|
+| `${originalFilename}` | Original filename before rename |
+| `${renamedFilename}` | Filename after rename |
+| `${s3Key}` | Full S3 object key |
+| `${bucket}` | Bucket name |
+| `${region}` | Bucket region |
+| `${url}` | URL from the default copy format |
+| `${fileSize}` | File size in bytes |
+| `${contentType}` | MIME type |
+| `${contentHash}` | Content hash |
+| `${timestamp}` | ISO 8601 timestamp |
 
 ## License
 
