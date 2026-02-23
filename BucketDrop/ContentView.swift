@@ -416,6 +416,7 @@ struct ContentView: View {
                         s3Key: result.key,
                         bucket: config.bucket,
                         region: config.region,
+                        scheme: config.uriScheme.isEmpty ? "s3" : config.uriScheme,
                         url: result.url,
                         fileSize: fileSize,
                         contentType: result.contentType,

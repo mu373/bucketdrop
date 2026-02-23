@@ -13,6 +13,7 @@ struct UploadMetadata: Sendable {
     var s3Key: String
     var bucket: String
     var region: String
+    var scheme: String
     var url: String
     var fileSize: Int64
     var contentType: String
@@ -26,6 +27,7 @@ struct UploadMetadata: Sendable {
             "${s3Key}": s3Key,
             "${bucket}": bucket,
             "${region}": region,
+            "${scheme}": scheme,
             "${url}": url,
             "${fileSize}": "\(fileSize)",
             "${contentType}": contentType,

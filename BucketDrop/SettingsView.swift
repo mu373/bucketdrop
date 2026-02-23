@@ -927,7 +927,8 @@ private let pillDisplayNames: [String: String] = [
     "url": "URL",
     "fileSize": "File Size",
     "contentType": "Content Type",
-    "contentHash": "Content Hash"
+    "contentHash": "Content Hash",
+    "scheme": "Scheme"
 ]
 
 /// Custom attachment cell that draws a capsule pill for a variable token.
@@ -1049,11 +1050,23 @@ private func rawTemplateString(from attributed: NSAttributedString) -> String {
 /// Holds a weak reference to the underlying NSTextView so variable buttons can insert at cursor.
 private final class TemplateTextViewRef {
     weak var textView: NSTextView?
+    /// Called after content is programmatically inserted so the binding stays in sync.
+    var onContentChanged: (() -> Void)?
 
     func insertAtCursor(_ text: String) {
         guard let textView else { return }
+        // Re-acquire first responder so the cursor position is valid
+        if textView.window?.firstResponder !== textView {
+            textView.window?.makeFirstResponder(textView)
+        }
         let range = textView.selectedRange()
-        textView.insertText(text, replacementRange: range)
+        // Directly manipulate text storage with pill conversion, bypassing the delegate chain
+        let attrStr = pillAttributedString(from: text)
+        textView.textStorage?.replaceCharacters(in: range, with: attrStr)
+        let newPos = range.location + attrStr.length
+        textView.setSelectedRange(NSRange(location: newPos, length: 0))
+        // Notify the coordinator so the binding updates
+        textView.delegate?.textDidChange?(Notification(name: NSText.didChangeNotification, object: textView))
     }
 }
 
@@ -1061,6 +1074,7 @@ private final class TemplateTextViewRef {
 private struct TemplateTokenField: NSViewRepresentable {
     @Binding var template: String
     var textViewRef: TemplateTextViewRef?
+    var onFocus: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(template: $template)
@@ -1068,6 +1082,8 @@ private struct TemplateTokenField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = PillTextView()
+        textView.onBecomeFirstResponder = onFocus
+        context.coordinator.onFocus = onFocus
         textView.isRichText = true
         textView.allowsUndo = true
         textView.isEditable = true
@@ -1114,7 +1130,11 @@ private struct TemplateTokenField: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+        guard let textView = scrollView.documentView as? PillTextView else { return }
+        textView.onBecomeFirstResponder = onFocus
+        context.coordinator.onFocus = onFocus
+        // Rebind ref on every update so reused views keep refs valid
+        textViewRef?.textView = textView
 
         // Keep textView size in sync with scrollView
         let contentSize = scrollView.contentSize
@@ -1142,9 +1162,14 @@ private struct TemplateTokenField: NSViewRepresentable {
         var template: Binding<String>
         var isUpdating = true // suppress feedback during programmatic updates
         weak var textView: NSTextView?
+        var onFocus: (() -> Void)?
 
         init(template: Binding<String>) {
             self.template = template
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            onFocus?()
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1182,6 +1207,14 @@ private struct TemplateTokenField: NSViewRepresentable {
 
 /// NSTextView subclass that accepts dragged strings and converts ${VAR} tokens to pills.
 private final class PillTextView: NSTextView {
+    var onBecomeFirstResponder: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result { onBecomeFirstResponder?() }
+        return result
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         if sender.draggingPasteboard.canReadObject(forClasses: [NSString.self]) {
             return .copy
@@ -1343,6 +1376,9 @@ private struct PostUploadActionEditorSheet: View {
     @State private var httpURLRef = TemplateTextViewRef()
     @State private var httpBodyRef = TemplateTextViewRef()
 
+    // Tracks the last focused TemplateTokenField ref for variable insertion
+    @State private var lastFocusedRef: TemplateTextViewRef?
+
     private var isDynamoDB: Bool {
         if case .dynamoDB = action.actionType { return true }
         return false
@@ -1354,6 +1390,7 @@ private struct PostUploadActionEditorSheet: View {
         ("s3Key", "S3 Key"),
         ("bucket", "Bucket"),
         ("region", "Region"),
+        ("scheme", "Scheme"),
         ("url", "URL"),
         ("fileSize", "File Size"),
         ("contentType", "Content Type"),
@@ -1476,31 +1513,41 @@ private struct PostUploadActionEditorSheet: View {
                 .padding(.vertical, 3)
                 Divider()
 
-                List(selection: $selectedAttributeID) {
-                    ForEach($attributes) { $attribute in
-                        HStack(spacing: 8) {
-                            TextField("Attribute", text: $attribute.name)
-                                .frame(width: 100)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach($attributes) { $attribute in
+                            let ref = refForAttribute(attribute.id)
+                            HStack(spacing: 8) {
+                                TextField("Attribute", text: $attribute.name)
+                                    .frame(width: 100)
 
-                            Picker("", selection: $attribute.type) {
-                                Text("String").tag("S")
-                                Text("Number").tag("N")
-                                Text("Boolean").tag("BOOL")
+                                Picker("", selection: $attribute.type) {
+                                    Text("String").tag("S")
+                                    Text("Number").tag("N")
+                                    Text("Boolean").tag("BOOL")
+                                }
+                                .labelsHidden()
+                                .frame(width: 70)
+
+                                TemplateTokenField(
+                                    template: $attribute.valueTemplate,
+                                    textViewRef: ref,
+                                    onFocus: {
+                                        selectedAttributeID = attribute.id
+                                        lastFocusedRef = ref
+                                    }
+                                )
+                                .frame(height: 22)
                             }
-                            .labelsHidden()
-                            .frame(width: 70)
-
-                            TemplateTokenField(
-                                template: $attribute.valueTemplate,
-                                textViewRef: refForAttribute(attribute.id)
-                            )
-                            .frame(height: 22)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(attribute.id == selectedAttributeID ? Color.accentColor.opacity(0.12) : Color.clear)
                         }
-                        .tag(Optional(attribute.id))
                     }
                 }
-                .listStyle(.bordered(alternatesRowBackgrounds: true))
                 .frame(height: 120)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .border(Color(nsColor: .separatorColor))
 
                 HStack(spacing: 0) {
                     Button {
@@ -1547,7 +1594,7 @@ private struct PostUploadActionEditorSheet: View {
             Text("URL")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            TemplateTokenField(template: $httpURLTemplate, textViewRef: httpURLRef)
+            TemplateTokenField(template: $httpURLTemplate, textViewRef: httpURLRef, onFocus: { lastFocusedRef = httpURLRef })
                 .frame(height: 32)
         }
 
@@ -1602,23 +1649,33 @@ private struct PostUploadActionEditorSheet: View {
                 .padding(.vertical, 3)
                 Divider()
 
-                List(selection: $selectedHeaderID) {
-                    ForEach($httpHeaders) { $header in
-                        HStack(spacing: 8) {
-                            TextField("Header", text: $header.name)
-                                .frame(width: 120)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach($httpHeaders) { $header in
+                            let ref = refForHeader(header.id)
+                            HStack(spacing: 8) {
+                                TextField("Header", text: $header.name)
+                                    .frame(width: 120)
 
-                            TemplateTokenField(
-                                template: $header.valueTemplate,
-                                textViewRef: refForHeader(header.id)
-                            )
-                            .frame(height: 22)
+                                TemplateTokenField(
+                                    template: $header.valueTemplate,
+                                    textViewRef: ref,
+                                    onFocus: {
+                                        selectedHeaderID = header.id
+                                        lastFocusedRef = ref
+                                    }
+                                )
+                                .frame(height: 22)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(header.id == selectedHeaderID ? Color.accentColor.opacity(0.12) : Color.clear)
                         }
-                        .tag(Optional(header.id))
                     }
                 }
-                .listStyle(.bordered(alternatesRowBackgrounds: true))
                 .frame(height: 80)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .border(Color(nsColor: .separatorColor))
 
                 HStack(spacing: 0) {
                     Button {
@@ -1653,7 +1710,7 @@ private struct PostUploadActionEditorSheet: View {
                 Text("Body")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                TemplateTokenField(template: $httpBodyTemplate, textViewRef: httpBodyRef)
+                TemplateTokenField(template: $httpBodyTemplate, textViewRef: httpBodyRef, onFocus: { lastFocusedRef = httpBodyRef })
                     .frame(height: 120)
             }
         }
@@ -1765,9 +1822,7 @@ private struct PostUploadActionEditorSheet: View {
     private func refForAttribute(_ id: UUID) -> TemplateTextViewRef {
         if let ref = attributeRefs[id] { return ref }
         let ref = TemplateTextViewRef()
-        DispatchQueue.main.async {
-            attributeRefs[id] = ref
-        }
+        attributeRefs[id] = ref
         return ref
     }
 
@@ -1789,34 +1844,16 @@ private struct PostUploadActionEditorSheet: View {
     private func refForHeader(_ id: UUID) -> TemplateTextViewRef {
         if let ref = headerRefs[id] { return ref }
         let ref = TemplateTextViewRef()
-        DispatchQueue.main.async {
-            headerRefs[id] = ref
-        }
+        headerRefs[id] = ref
         return ref
     }
 
     // MARK: - Variable Insertion (unified)
 
     private func insertVariable(_ token: String) {
-        // Check all TemplateTextViewRefs for the one that's first responder
-        let allRefs: [TemplateTextViewRef] = {
-            var refs: [TemplateTextViewRef] = []
-            if isDynamoDB {
-                refs.append(contentsOf: attributeRefs.values)
-            } else {
-                refs.append(httpURLRef)
-                refs.append(httpBodyRef)
-                refs.append(contentsOf: headerRefs.values)
-            }
-            return refs
-        }()
-
-        let activeRef = allRefs.first(where: {
-            $0.textView?.window?.firstResponder === $0.textView
-        })
-
-        if let activeRef {
-            activeRef.insertAtCursor("${\(token)}")
+        // Use the last focused template field (tracked via onFocus callbacks)
+        if let lastFocusedRef {
+            lastFocusedRef.insertAtCursor("${\(token)}")
             return
         }
 
@@ -1840,6 +1877,7 @@ private struct PostUploadActionEditorSheet: View {
             "s3Key": "public/a1b2c3.png",
             "bucket": "my-bucket",
             "region": dbRegion.isEmpty ? "us-east-1" : dbRegion,
+            "scheme": "s3",
             "url": "https://cdn.example.com/public/a1b2c3.png",
             "fileSize": "284521",
             "contentType": "image/png",
@@ -1886,6 +1924,7 @@ private struct PostUploadActionEditorSheet: View {
             "s3Key": "public/a1b2c3.png",
             "bucket": "my-bucket",
             "region": "us-east-1",
+            "scheme": "s3",
             "url": "https://cdn.example.com/public/a1b2c3.png",
             "fileSize": "284521",
             "contentType": "image/png",
