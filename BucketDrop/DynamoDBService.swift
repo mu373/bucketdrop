@@ -10,7 +10,7 @@ import Foundation
 struct UploadMetadata: Sendable {
     var originalFilename: String
     var renamedFilename: String
-    var s3Key: String
+    var path: String
     var bucket: String
     var region: String
     var scheme: String
@@ -18,13 +18,14 @@ struct UploadMetadata: Sendable {
     var fileSize: Int64
     var contentType: String
     var contentHash: String
+    var hashAlgorithm: String
     var timestamp: String
 
     nonisolated func resolveTemplate(_ template: String) -> String {
         let replacements = [
             "${originalFilename}": originalFilename,
             "${renamedFilename}": renamedFilename,
-            "${s3Key}": s3Key,
+            "${path}": path,
             "${bucket}": bucket,
             "${region}": region,
             "${scheme}": scheme,
@@ -32,6 +33,7 @@ struct UploadMetadata: Sendable {
             "${fileSize}": "\(fileSize)",
             "${contentType}": contentType,
             "${contentHash}": contentHash,
+            "${hashAlgorithm}": hashAlgorithm,
             "${timestamp}": timestamp
         ]
 

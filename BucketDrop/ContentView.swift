@@ -413,7 +413,7 @@ struct ContentView: View {
                     let metadata = UploadMetadata(
                         originalFilename: tasks[index].filename,
                         renamedFilename: (result.key as NSString).lastPathComponent,
-                        s3Key: result.key,
+                        path: result.key,
                         bucket: config.bucket,
                         region: config.region,
                         scheme: config.uriScheme.isEmpty ? "s3" : config.uriScheme,
@@ -421,6 +421,7 @@ struct ContentView: View {
                         fileSize: fileSize,
                         contentType: result.contentType,
                         contentHash: result.contentHash,
+                        hashAlgorithm: config.hashAlgorithm,
                         timestamp: ISO8601DateFormatter().string(from: Date())
                     )
 

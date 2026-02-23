@@ -278,7 +278,7 @@ struct SettingsView: View {
                     TextField("URI Scheme", text: $draft.uriScheme, prompt: Text(selectedProvider.defaultScheme ?? "s3"))
                     TextField("Bucket", text: $draft.bucket)
                     TextField("Region", text: $draft.region, prompt: Text(regionPlaceholder))
-                    TextField("Key Prefix", text: $draft.keyPrefix, prompt: Text("public/"))
+                    TextField("Key Prefix", text: $draft.keyPrefix, prompt: Text("myfolder/"))
                 } header: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Bucket")
@@ -455,6 +455,10 @@ struct SettingsView: View {
                                     Divider()
                                     Button("Duplicate") {
                                         duplicatePostUploadAction(action)
+                                    }
+                                    Divider()
+                                    Button("Delete", role: .destructive) {
+                                        deletePostUploadAction(action)
                                     }
                                 }
                             }
@@ -777,6 +781,13 @@ struct SettingsView: View {
         editingPostUploadAction = action
     }
 
+    private func deletePostUploadAction(_ action: PostUploadAction) {
+        draft.postUploadActions.removeAll { $0.id == action.id }
+        if selectedPostUploadActionID == action.id {
+            selectedPostUploadActionID = nil
+        }
+    }
+
     private func removeSelectedPostUploadAction() {
         guard let selectedPostUploadActionID else { return }
         draft.postUploadActions.removeAll { $0.id == selectedPostUploadActionID }
@@ -970,13 +981,14 @@ private let pillDisplayNames: [String: String] = [
     // DynamoDB action variables
     "originalFilename": "Original Filename",
     "renamedFilename": "Renamed Filename",
-    "s3Key": "S3 Key",
+    "path": "Path",
     "bucket": "Bucket",
     "region": "Region",
     "url": "URL",
     "fileSize": "File Size",
     "contentType": "Content Type",
     "contentHash": "Content Hash",
+    "hashAlgorithm": "Hash Algorithm",
     "scheme": "Scheme"
 ]
 
@@ -1436,7 +1448,7 @@ private struct PostUploadActionEditorSheet: View {
     private let variableReferences: [(token: String, label: String)] = [
         ("originalFilename", "Original Filename"),
         ("renamedFilename", "Renamed Filename"),
-        ("s3Key", "S3 Key"),
+        ("path", "Path"),
         ("bucket", "Bucket"),
         ("region", "Region"),
         ("scheme", "Scheme"),
@@ -1444,6 +1456,7 @@ private struct PostUploadActionEditorSheet: View {
         ("fileSize", "File Size"),
         ("contentType", "Content Type"),
         ("contentHash", "Content Hash"),
+        ("hashAlgorithm", "Hash Algorithm"),
         ("timestamp", "Timestamp")
     ]
 
@@ -1923,14 +1936,15 @@ private struct PostUploadActionEditorSheet: View {
         let exampleValues: [String: String] = [
             "originalFilename": "photo.png",
             "renamedFilename": "a1b2c3.png",
-            "s3Key": "public/a1b2c3.png",
+            "path": "myfolder/a1b2c3.png",
             "bucket": "my-bucket",
             "region": dbRegion.isEmpty ? "us-east-1" : dbRegion,
             "scheme": "s3",
-            "url": "https://cdn.example.com/public/a1b2c3.png",
+            "url": "https://cdn.example.com/myfolder/a1b2c3.png",
             "fileSize": "284521",
             "contentType": "image/png",
-            "contentHash": "sha256:abc123...",
+            "contentHash": "a1b2c3d4e5f6...",
+            "hashAlgorithm": "sha256",
             "timestamp": "2026-02-22T10:30:00Z"
         ]
 
@@ -1970,14 +1984,15 @@ private struct PostUploadActionEditorSheet: View {
         let exampleValues: [String: String] = [
             "originalFilename": "photo.png",
             "renamedFilename": "a1b2c3.png",
-            "s3Key": "public/a1b2c3.png",
+            "path": "myfolder/a1b2c3.png",
             "bucket": "my-bucket",
             "region": "us-east-1",
             "scheme": "s3",
-            "url": "https://cdn.example.com/public/a1b2c3.png",
+            "url": "https://cdn.example.com/myfolder/a1b2c3.png",
             "fileSize": "284521",
             "contentType": "image/png",
-            "contentHash": "sha256:abc123...",
+            "contentHash": "a1b2c3d4e5f6...",
+            "hashAlgorithm": "sha256",
             "timestamp": "2026-02-22T10:30:00Z"
         ]
         let resolved: String = {
