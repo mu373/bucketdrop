@@ -1607,7 +1607,7 @@ private struct PostUploadActionEditorSheet: View {
                         }
                     }
                 }
-                .frame(height: 120)
+                .frame(height: 200)
                 .background(Color(nsColor: .controlBackgroundColor))
                 .border(Color(nsColor: .separatorColor))
 
