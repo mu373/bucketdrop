@@ -7,6 +7,9 @@
 
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
+
+private let postUploadActionPasteboardType = NSPasteboard.PasteboardType("com.bucketdrop.postUploadAction")
 
 private struct BucketConfigDraft: Equatable {
     var name: String = ""
@@ -441,7 +444,26 @@ struct SettingsView: View {
                                         .labelsHidden()
                                 }
                                 .tag(Optional(action.id))
+                                .contextMenu {
+                                    Button("Copy") {
+                                        copyPostUploadAction(action)
+                                    }
+                                    Button("Paste") {
+                                        pastePostUploadAction()
+                                    }
+                                    .disabled(!canPastePostUploadAction())
+                                    Divider()
+                                    Button("Duplicate") {
+                                        duplicatePostUploadAction(action)
+                                    }
+                                }
                             }
+                        }
+                        .contextMenu {
+                            Button("Paste") {
+                                pastePostUploadAction()
+                            }
+                            .disabled(!canPastePostUploadAction())
                         }
                         .listStyle(.bordered(alternatesRowBackgrounds: true))
                         .frame(height: 120)
@@ -773,6 +795,33 @@ struct SettingsView: View {
         guard let index = draft.postUploadActions.firstIndex(where: { $0.id == updatedAction.id }) else { return }
         draft.postUploadActions[index] = updatedAction
         selectedPostUploadActionID = updatedAction.id
+    }
+
+    private func copyPostUploadAction(_ action: PostUploadAction) {
+        guard let data = try? JSONEncoder().encode(action) else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setData(data, forType: postUploadActionPasteboardType)
+    }
+
+    private func canPastePostUploadAction() -> Bool {
+        NSPasteboard.general.data(forType: postUploadActionPasteboardType) != nil
+    }
+
+    private func pastePostUploadAction() {
+        guard let data = NSPasteboard.general.data(forType: postUploadActionPasteboardType),
+              var action = try? JSONDecoder().decode(PostUploadAction.self, from: data) else { return }
+        action.id = UUID()
+        draft.postUploadActions.append(action)
+        selectedPostUploadActionID = action.id
+    }
+
+    private func duplicatePostUploadAction(_ action: PostUploadAction) {
+        var copy = action
+        copy.id = UUID()
+        copy.label = action.label.isEmpty ? "" : "\(action.label) Copy"
+        draft.postUploadActions.append(copy)
+        selectedPostUploadActionID = copy.id
     }
 
     private func applyProviderDefaults(_ provider: BucketProvider) {
