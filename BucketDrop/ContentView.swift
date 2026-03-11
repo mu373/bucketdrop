@@ -413,6 +413,7 @@ struct ContentView: View {
                     let metadata = UploadMetadata(
                         originalFilename: tasks[index].filename,
                         renamedFilename: (result.key as NSString).lastPathComponent,
+                        originalFilepath: fileURL.path,
                         path: result.key,
                         bucket: config.bucket,
                         region: config.region,

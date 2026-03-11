@@ -10,6 +10,7 @@ import Foundation
 struct UploadMetadata: Sendable {
     var originalFilename: String
     var renamedFilename: String
+    var originalFilepath: String
     var path: String
     var bucket: String
     var region: String
@@ -25,6 +26,7 @@ struct UploadMetadata: Sendable {
         let replacements = [
             "${originalFilename}": originalFilename,
             "${renamedFilename}": renamedFilename,
+            "${originalFilepath}": originalFilepath,
             "${path}": path,
             "${bucket}": bucket,
             "${region}": region,

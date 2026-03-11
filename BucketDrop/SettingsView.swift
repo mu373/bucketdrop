@@ -981,6 +981,7 @@ private let pillDisplayNames: [String: String] = [
     // DynamoDB action variables
     "originalFilename": "Original Filename",
     "renamedFilename": "Renamed Filename",
+    "originalFilepath": "Original Filepath",
     "path": "Path",
     "bucket": "Bucket",
     "region": "Region",
@@ -1448,6 +1449,7 @@ private struct PostUploadActionEditorSheet: View {
     private let variableReferences: [(token: String, label: String)] = [
         ("originalFilename", "Original Filename"),
         ("renamedFilename", "Renamed Filename"),
+        ("originalFilepath", "Original Filepath"),
         ("path", "Path"),
         ("bucket", "Bucket"),
         ("region", "Region"),
@@ -1936,6 +1938,7 @@ private struct PostUploadActionEditorSheet: View {
         let exampleValues: [String: String] = [
             "originalFilename": "photo.png",
             "renamedFilename": "a1b2c3.png",
+            "originalFilepath": "/Users/minami/Downloads/photo.png",
             "path": "myfolder/a1b2c3.png",
             "bucket": "my-bucket",
             "region": dbRegion.isEmpty ? "us-east-1" : dbRegion,
@@ -1984,6 +1987,7 @@ private struct PostUploadActionEditorSheet: View {
         let exampleValues: [String: String] = [
             "originalFilename": "photo.png",
             "renamedFilename": "a1b2c3.png",
+            "originalFilepath": "/Users/minami/Downloads/photo.png",
             "path": "myfolder/a1b2c3.png",
             "bucket": "my-bucket",
             "region": "us-east-1",

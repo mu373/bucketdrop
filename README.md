@@ -90,13 +90,16 @@ Both action types support these variables in their template fields:
 |---|---|
 | `${originalFilename}` | Original filename before rename |
 | `${renamedFilename}` | Filename after rename |
-| `${s3Key}` | Full S3 object key |
+| `${originalFilepath}` | Absolute local source path before upload |
+| `${path}` | Full S3 object key |
 | `${bucket}` | Bucket name |
 | `${region}` | Bucket region |
+| `${scheme}` | URL scheme used for generated URLs |
 | `${url}` | URL from the default copy format |
 | `${fileSize}` | File size in bytes |
 | `${contentType}` | MIME type |
 | `${contentHash}` | Content hash |
+| `${hashAlgorithm}` | Hash algorithm used for `${contentHash}` |
 | `${timestamp}` | ISO 8601 timestamp |
 
 ## License
